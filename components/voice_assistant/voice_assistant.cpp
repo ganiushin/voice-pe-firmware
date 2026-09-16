@@ -893,7 +893,6 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
           this->continue_conversation_ = (arg.value == "1");
         }
       }
-      ESP_LOGD(TAG, "Intent ended, continue conversation: %s", YESNO(this->continue_conversation_));
       this->defer([this]() { this->intent_end_trigger_.trigger(); });
       break;
     }
