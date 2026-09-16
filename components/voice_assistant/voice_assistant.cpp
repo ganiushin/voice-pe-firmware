@@ -366,6 +366,7 @@ void VoiceAssistant::loop() {
     }
     case State::START_PIPELINE: {
       ESP_LOGD(TAG, "Requesting start");
+      this->ignore_run_events_ = false;
       uint32_t flags = 0;
       if (!this->continue_conversation_ && this->use_wake_word_)
         flags |= api::enums::VOICE_ASSISTANT_REQUEST_USE_WAKE_WORD;
@@ -757,6 +758,11 @@ void VoiceAssistant::request_stop() {
       break;
     case State::AWAITING_RESPONSE:
       this->signal_stop_();
+      // Home Assistant aborts the run by cancelling it, so it may never send RUN_END. Finish here and ignore
+      // whatever the aborted run still sends, so a late response isn't played.
+      this->ignore_run_events_ = true;
+      this->set_state_(State::IDLE, State::IDLE);
+      this->defer([this]() { this->end_trigger_.trigger(); });
       break;
     case State::STREAMING_RESPONSE:
 #ifdef USE_MEDIA_PLAYER
@@ -829,6 +835,10 @@ void VoiceAssistant::start_playback_timeout_() {
 
 void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
   ESP_LOGD(TAG, "Event Type: %" PRId32, msg.event_type);
+  if (this->ignore_run_events_) {
+    ESP_LOGD(TAG, "Ignoring event from an aborted run");
+    return;
+  }
   switch (msg.event_type) {
     case api::enums::VOICE_ASSISTANT_RUN_START:
       ESP_LOGD(TAG, "Assist Pipeline running");

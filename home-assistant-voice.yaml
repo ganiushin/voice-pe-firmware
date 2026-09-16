@@ -133,6 +133,11 @@ psram:
   ignore_not_found: false  # The VPE has PSRAM, so this is safe. Allows configuring WiFi driver to use more resources (done automatically by the speaker media player)
 
 globals:
+  # True once the device has replied in the current conversation, so "stop" in a follow-up ends it
+  - id: conversation_has_reply
+    type: bool
+    restore_value: no
+    initial_value: 'false'
   # Global index for our LEDs. So that switching between different animation does not lead to unwanted effects.
   - id: global_led_animation_index
     type: int
@@ -1480,9 +1485,11 @@ script:
   # so "stop" works both while the device speaks and while it listens for a follow-up.
   - id: enable_conversation_stop_word
     then:
+      - lambda: id(conversation_has_reply) = true;
       - micro_wake_word.enable_model: stop
   - id: disable_conversation_stop_word
     then:
+      - lambda: id(conversation_has_reply) = false;
       - if:
           condition:
             switch.is_off: timer_ringing
@@ -1851,6 +1858,47 @@ voice_assistant:
   on_listening:
     - lambda: id(voice_assistant_phase) = ${voice_assist_waiting_for_command_phase_id};
     - script.execute: control_leds
+  # The stop word model is English and often misses a spoken "стоп". In a follow-up, a transcript that is only
+  # "stop" or "стоп" ends the conversation before the agent answers. In the first turn it still goes to
+  # Home Assistant, e.g. to stop music.
+  on_stt_end:
+    - if:
+        condition:
+          lambda: |-
+            if (!id(conversation_has_reply)) return false;
+            // Keep letters only and lowercase them (ASCII and Cyrillic А-Я in UTF-8)
+            std::string w;
+            for (size_t i = 0; i < x.size(); i++) {
+              const unsigned char c = x[i];
+              if (c < 0x80) {
+                if (isalpha(c)) w += static_cast<char>(tolower(c));
+                continue;
+              }
+              if (c == 0xE2 && i + 2 < x.size() && static_cast<unsigned char>(x[i + 1]) == 0x80) {
+                i += 2;  // General punctuation, e.g. an ellipsis
+                continue;
+              }
+              if (c == 0xD0 && i + 1 < x.size()) {
+                const unsigned char n = x[i + 1];
+                if (n >= 0x90 && n <= 0x9F) {
+                  w += static_cast<char>(0xD0);
+                  w += static_cast<char>(n + 0x20);
+                  i++;
+                  continue;
+                }
+                if (n >= 0xA0 && n <= 0xAF) {
+                  w += static_cast<char>(0xD1);
+                  w += static_cast<char>(n - 0x20);
+                  i++;
+                  continue;
+                }
+              }
+              w += static_cast<char>(c);
+            }
+            return w == "stop" || w == "стоп";
+        then:
+          - logger.log: "Stop phrase recognised, ending the conversation"
+          - voice_assistant.stop:
   on_stt_vad_start:
     - lambda: id(voice_assistant_phase) = ${voice_assist_listening_for_command_phase_id};
     - script.execute: control_leds

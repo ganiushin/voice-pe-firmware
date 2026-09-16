@@ -352,6 +352,8 @@ class VoiceAssistant final : public Component {
   bool silence_detection_;
 
   bool continue_conversation_{false};
+  // Set when the run was aborted while waiting for the response; cleared when a new run is requested
+  bool ignore_run_events_{false};
 
   State state_{State::IDLE};
   State desired_state_{State::IDLE};
