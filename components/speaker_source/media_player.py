@@ -26,6 +26,7 @@ DEPENDENCIES = ["media_source", "speaker"]
 CODEOWNERS = ["@kahrendt"]
 
 CONF_ANNOUNCEMENT_PIPELINE = "announcement_pipeline"
+CONF_ANNOUNCEMENT_START_TIMEOUT = "announcement_start_timeout"
 CONF_MEDIA_PIPELINE = "media_pipeline"
 CONF_ON_MUTE = "on_mute"
 CONF_PIPELINE = "pipeline"
@@ -140,6 +141,10 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_VOLUME_MAX, default=1.0): cv.percentage,
             cv.Optional(CONF_VOLUME_MIN, default=0.0): cv.percentage,
             cv.Optional(CONF_ANNOUNCEMENT_PIPELINE): PIPELINE_SCHEMA,
+            # Guard: an announcement that has not started playing by then is stopped and reported as failed
+            cv.Optional(
+                CONF_ANNOUNCEMENT_START_TIMEOUT, default="30s"
+            ): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_MEDIA_PIPELINE): PIPELINE_SCHEMA,
             cv.Optional(CONF_ON_MUTE): automation.validate_automation(single=True),
             cv.Optional(CONF_ON_UNMUTE): automation.validate_automation(single=True),
@@ -183,6 +188,9 @@ async def to_code(config: ConfigType) -> None:
     cg.add(var.set_volume_initial(config[CONF_VOLUME_INITIAL]))
     cg.add(var.set_volume_max(config[CONF_VOLUME_MAX]))
     cg.add(var.set_volume_min(config[CONF_VOLUME_MIN]))
+    cg.add(
+        var.set_announcement_start_timeout(config[CONF_ANNOUNCEMENT_START_TIMEOUT])
+    )
 
     for pipeline_key, (pipeline_enum, purpose) in _PIPELINE_INFO.items():
         if pipeline_config := config.get(pipeline_key):

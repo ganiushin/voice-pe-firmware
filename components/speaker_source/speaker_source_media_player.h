@@ -95,6 +95,8 @@ struct SourceBinding : public media_source::MediaSourceListener {
 
 /// @brief Timeout IDs for playlist delay, indexed by Pipeline enum
 static constexpr uint32_t PIPELINE_TIMEOUT_IDS[] = {1, 2};
+/// @brief Timeout ID for an announcement that never starts playing
+static constexpr uint32_t ANNOUNCEMENT_START_TIMEOUT_ID = 3;
 
 struct PipelineContext {
   speaker::Speaker *speaker{nullptr};
@@ -131,12 +133,16 @@ struct PipelineContext {
   // keeps counting after the source goes idle, so it tells when the tail of the audio has actually left the speaker.
   std::atomic<uint32_t> unplayed_frames{0};
 
+  // Commands for this pipeline currently in the control queue. Main loop only.
+  uint32_t queued_commands{0};
+
   // Tracks one announcement request until the pipeline is completely quiet again. Main loop only.
   bool request_active{false};
   bool request_started{false};
   bool request_failed{false};
   bool request_stopped{false};
-  // millis() when only unplayed frames were left to wait for; 0 if not waiting
+  // Set while only unplayed frames are left to wait for, since drain_start_ms
+  bool draining{false};
   uint32_t drain_start_ms{0};
 
   /// @brief Check if this pipeline is configured (has a speaker assigned)
@@ -201,6 +207,9 @@ class SpeakerSourceMediaPlayer final : public Component, public media_player::Me
 
   void set_playlist_delay_ms(uint8_t pipeline, uint32_t delay_ms);
 
+  /// @brief How long an announcement may take to start playing before it is stopped and reported as failed
+  void set_announcement_start_timeout(uint32_t timeout_ms) { this->announcement_start_timeout_ms_ = timeout_ms; }
+
   /// @brief Registers a callback fired on the main loop once the announcement pipeline has finished everything it was
   /// asked to play: the playlist is exhausted, no source is active or pending, and the audio was played out to the DAC.
   template<typename F> void add_on_announcement_finished_callback(F &&callback) {
@@ -230,6 +239,12 @@ class SpeakerSourceMediaPlayer final : public Component, public media_player::Me
 
   /// @brief Stops the pipeline speaker and drops the frame accounting for audio that will never be played
   void stop_speaker_(uint8_t pipeline);
+
+  /// @brief Starts tracking an announcement request (no-op if one is already being tracked)
+  void begin_announcement_request_();
+
+  /// @brief Sends a command to the control queue and counts it for its pipeline
+  bool send_command_(const MediaPlayerControlCommand &command);
 
   // Receives commands from HA or from the voice assistant component
   // Sends commands to the media_control_command_queue_
@@ -284,6 +299,7 @@ class SpeakerSourceMediaPlayer final : public Component, public media_player::Me
   Trigger<float> volume_trigger_;
 
   CallbackManager<void(AnnouncementResult)> announcement_finished_callback_;
+  uint32_t announcement_start_timeout_ms_{30000};
 
   // The amount to change the volume on volume up/down commands
   float volume_increment_;

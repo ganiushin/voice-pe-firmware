@@ -189,7 +189,10 @@ void SpeakerSourceMediaPlayer::handle_media_state_changed_(uint8_t pipeline, med
     }
     // Source started playing - make it the active source if no one else is active
     if (ps.active_source == nullptr) {
-      ps.request_started = true;
+      if (pipeline == ANNOUNCEMENT_PIPELINE && ps.request_active && !ps.request_started) {
+        ps.request_started = true;
+        this->cancel_timeout(ANNOUNCEMENT_START_TIMEOUT_ID);
+      }
       ps.active_source = source;
       ps.last_source = nullptr;
 
@@ -225,6 +228,37 @@ void SpeakerSourceMediaPlayer::handle_source_error_(uint8_t pipeline, media_sour
 }
 
 // THREAD CONTEXT: Called from main loop
+void SpeakerSourceMediaPlayer::begin_announcement_request_() {
+  PipelineContext &ps = this->pipelines_[ANNOUNCEMENT_PIPELINE];
+  if (ps.request_active) {
+    return;
+  }
+  ps.request_active = true;
+  ps.request_started = false;
+  ps.request_failed = false;
+  ps.request_stopped = false;
+  // Guard for a source that neither plays nor reports an error
+  this->set_timeout(ANNOUNCEMENT_START_TIMEOUT_ID, this->announcement_start_timeout_ms_, [this]() {
+    PipelineContext &ann = this->pipelines_[ANNOUNCEMENT_PIPELINE];
+    if (!ann.request_active || ann.request_started) {
+      return;
+    }
+    ESP_LOGW(TAG, "Announcement did not start playing in time");
+    ann.request_failed = true;
+    this->handle_player_command_(media_player::MEDIA_PLAYER_COMMAND_STOP, ANNOUNCEMENT_PIPELINE);
+  });
+}
+
+// THREAD CONTEXT: Called from main loop
+bool SpeakerSourceMediaPlayer::send_command_(const MediaPlayerControlCommand &command) {
+  if (xQueueSend(this->media_control_command_queue_, &command, 0) != pdTRUE) {
+    return false;
+  }
+  this->pipelines_[command.pipeline].queued_commands++;
+  return true;
+}
+
+// THREAD CONTEXT: Called from main loop
 void SpeakerSourceMediaPlayer::stop_speaker_(uint8_t pipeline) {
   PipelineContext &ps = this->pipelines_[pipeline];
   ps.speaker->stop();
@@ -240,7 +274,7 @@ void SpeakerSourceMediaPlayer::check_announcement_finished_() {
 
   // Quiet means: no queued commands, nothing left in the playlist, no source playing or starting, and every frame
   // written to the speaker has been played out to the DAC.
-  if (uxQueueMessagesWaiting(this->media_control_command_queue_) > 0) {
+  if (ps.queued_commands > 0) {
     return;
   }
   if (ps.playlist_index < ps.playlist.size()) {
@@ -250,15 +284,16 @@ void SpeakerSourceMediaPlayer::check_announcement_finished_() {
     return;
   }
   if (!ps.speaker->is_stopped()) {
-    ps.drain_start_ms = 0;
+    ps.draining = false;
     return;
   }
   const audio::AudioStreamInfo &stream_info = ps.speaker->get_audio_stream_info();
   const uint32_t unplayed = ps.unplayed_frames.load(std::memory_order_relaxed);
   if (unplayed > stream_info.ms_to_frames(UNPLAYED_TOLERANCE_MS)) {
     const uint32_t now = millis();
-    if (ps.drain_start_ms == 0) {
-      ps.drain_start_ms = now == 0 ? 1 : now;
+    if (!ps.draining) {
+      ps.draining = true;
+      ps.drain_start_ms = now;
       return;
     }
     const uint32_t unplayed_ms =
@@ -269,7 +304,8 @@ void SpeakerSourceMediaPlayer::check_announcement_finished_() {
     ESP_LOGW(TAG, "%" PRIu32 " announcement frames were never reported as played", unplayed);
     ps.unplayed_frames.store(0, std::memory_order_relaxed);
   }
-  ps.drain_start_ms = 0;
+  ps.draining = false;
+  this->cancel_timeout(ANNOUNCEMENT_START_TIMEOUT_ID);
 
   AnnouncementResult result = AnnouncementResult::COMPLETED;
   if (ps.request_stopped) {
@@ -491,7 +527,7 @@ void SpeakerSourceMediaPlayer::queue_command_(MediaPlayerControlCommand::Type ty
   MediaPlayerControlCommand cmd{};
   cmd.type = type;
   cmd.pipeline = pipeline;
-  if (xQueueSend(this->media_control_command_queue_, &cmd, 0) != pdTRUE) {
+  if (!this->send_command_(cmd)) {
     ESP_LOGE(TAG, "Queue full, command dropped");
   }
 }
@@ -606,6 +642,7 @@ void SpeakerSourceMediaPlayer::process_control_queue_() {
   // Only remove from queue if successfully executed
   if (command_executed) {
     xQueueReceive(this->media_control_command_queue_, &control_command, 0);
+    this->pipelines_[control_command.pipeline].queued_commands--;
 
     // Delete the allocated string for PLAY_URI and ENQUEUE_URI commands
     if (control_command.type == MediaPlayerControlCommand::PLAY_URI ||
@@ -839,17 +876,13 @@ void SpeakerSourceMediaPlayer::control(const media_player::MediaPlayerCall &call
     // can easily exceed 500 bytes). Deleted in process_control_queue_() after the command is consumed. FreeRTOS queues
     // require items to be copyable, so we store a pointer to the string in the queue rather than the string itself.
     control_command.data.uri = new std::string(media_url.value());
-    PipelineContext &ps = this->pipelines_[control_command.pipeline];
-    if (control_command.pipeline == ANNOUNCEMENT_PIPELINE && !ps.request_active) {
-      ps.request_active = true;
-      ps.request_started = false;
-      ps.request_failed = false;
-      ps.request_stopped = false;
+    if (control_command.pipeline == ANNOUNCEMENT_PIPELINE) {
+      this->begin_announcement_request_();
     }
-    if (xQueueSend(this->media_control_command_queue_, &control_command, 0) != pdTRUE) {
+    if (!this->send_command_(control_command)) {
       delete control_command.data.uri;
       ESP_LOGE(TAG, "Queue full, URI dropped");
-      ps.request_failed = true;
+      this->pipelines_[control_command.pipeline].request_failed = true;
     }
     return;
   }
@@ -888,7 +921,7 @@ void SpeakerSourceMediaPlayer::control(const media_player::MediaPlayerCall &call
         // Queue command for processing in loop()
         control_command.type = MediaPlayerControlCommand::SEND_COMMAND;
         control_command.data.command = cmd.value();
-        if (xQueueSend(this->media_control_command_queue_, &control_command, 0) != pdTRUE) {
+        if (!this->send_command_(control_command)) {
           ESP_LOGE(TAG, "Queue full, command dropped");
         }
         return;

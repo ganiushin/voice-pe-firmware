@@ -1,6 +1,10 @@
 substitutions:
   # Where the patched speaker_source / voice_assistant components come from
   voice_pe_components_source: github://ganiushin/voice-pe-firmware@main
+  # Phrase reported by the "stop" micro wake word model (stop.json)
+  stop_word_phrase: Stop
+  # Transcripts (letters only, lowercase) that end a follow-up before the agent answers, as C++ string literals
+  stop_phrases: '"stop", "стоп"'
   # Phases of the Voice Assistant
   # The voice assistant is ready to be triggered by a wake word
   voice_assist_idle_phase_id: '1'
@@ -243,8 +247,12 @@ switch:
     internal: true
     restore_mode: ALWAYS_OFF
     on_turn_off:
-      # Disable stop wake word
-      - micro_wake_word.disable_model: stop
+      # Disable stop wake word, unless a conversation still needs it
+      - if:
+          condition:
+            lambda: return !id(conversation_has_reply);
+          then:
+            - micro_wake_word.disable_model: stop
       - script.execute: disable_repeat
       # Stop any current announcement (ie: stop the timer ring mid playback)
       - if:
@@ -1485,11 +1493,9 @@ script:
   # so "stop" works both while the device speaks and while it listens for a follow-up.
   - id: enable_conversation_stop_word
     then:
-      - lambda: id(conversation_has_reply) = true;
       - micro_wake_word.enable_model: stop
   - id: disable_conversation_stop_word
     then:
-      - lambda: id(conversation_has_reply) = false;
       - if:
           condition:
             switch.is_off: timer_ringing
@@ -1636,6 +1642,8 @@ media_player:
         - http_media_source
         - sendspin_media_source
     volume_increment: 0.05
+    # Guard only: an announcement that hasn't started playing by then is stopped and reported as failed
+    announcement_start_timeout: 30s
     volume_min: 0.4
     volume_max: 0.85
     on_mute:
@@ -1743,7 +1751,7 @@ micro_wake_word:
                 # The stop word only stops. A wake word interrupts and starts listening right away.
                 - if:
                     condition:
-                      lambda: return wake_word != "Stop";
+                      lambda: return wake_word != "${stop_word_phrase}";
                     then:
                       # Wait for the interrupted reply to actually go silent, so it isn't recorded.
                       # The timeout is only a guard; the voice assistant finishes on the media player's event.
@@ -1814,8 +1822,6 @@ voice_assistant:
   media_player: external_media_player
   micro_wake_word: mww
   use_wake_word: false
-  # Guard only: ends the conversation if the media player never reports back about a response
-  response_start_timeout: 30s
   noise_suppression_level: 0
   auto_gain: 0 dbfs
   volume_multiplier: 1
@@ -1859,7 +1865,7 @@ voice_assistant:
     - lambda: id(voice_assistant_phase) = ${voice_assist_waiting_for_command_phase_id};
     - script.execute: control_leds
   # The stop word model is English and often misses a spoken "стоп". In a follow-up, a transcript that is only
-  # "stop" or "стоп" ends the conversation before the agent answers. In the first turn it still goes to
+  # one of ${stop_phrases} ends the conversation before the agent answers. In the first turn it still goes to
   # Home Assistant, e.g. to stop music.
   on_stt_end:
     - if:
@@ -1895,7 +1901,10 @@ voice_assistant:
               }
               w += static_cast<char>(c);
             }
-            return w == "stop" || w == "стоп";
+            for (const char *phrase : {${stop_phrases}}) {
+              if (w == phrase) return true;
+            }
+            return false;
         then:
           - logger.log: "Stop phrase recognised, ending the conversation"
           - voice_assistant.stop:
@@ -1911,7 +1920,9 @@ voice_assistant:
           # A nonempty x variable means a streaming TTS url was sent to the media player
           lambda: 'return !x.empty();'
         then:
-          - lambda: id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
+          - lambda: |-
+              id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
+              id(conversation_has_reply) = true;
           - script.execute: control_leds
           - script.execute: enable_conversation_stop_word
   on_tts_start:
@@ -1920,7 +1931,9 @@ voice_assistant:
           # The intent_progress trigger didn't start the TTS Reponse
           lambda: 'return id(voice_assistant_phase) != ${voice_assist_replying_phase_id};'
         then:
-          - lambda: id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
+          - lambda: |-
+              id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
+              id(conversation_has_reply) = true;
           - script.execute: control_leds
           - script.execute: enable_conversation_stop_word
   # When the voice assistant ends ...
@@ -1928,6 +1941,7 @@ voice_assistant:
     - wait_until:
         not:
           voice_assistant.is_running:
+    - lambda: id(conversation_has_reply) = false;
     - script.execute: disable_conversation_stop_word
     # Stop ducking audio.
     - mixer_speaker.apply_ducking:
