@@ -14,15 +14,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Own build job instead of esphome/workflows build.yml: that one sets the version by replacing "version: dev",
+  # and Home Assistant treats "dev" as newer than any release, so a local build would never be offered an update.
   build-firmware:
     name: Build Firmware
-    uses: esphome/workflows/.github/workflows/build.yml@0fdd5e311b7e744069166696072a1a9cbc5fbeb6  # 2026.8.1
-    with:
-      files: home-assistant-voice.factory.yaml
-      esphome-version: 2026.9.0
-      release-summary: ${{ github.event_name == 'release' && github.event.release.body || '' }}
-      release-url: ${{ github.event_name == 'release' && github.event.release.html_url || '' }}
-      release-version: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set version
+        id: version
+        env:
+          RELEASE_VERSION: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
+        run: echo "version=${RELEASE_VERSION:-0.0.0-ci.${{ github.run_number }}}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        id: esphome-build
+        uses: esphome/build-action@6b9d3f593d626a2f0d2c17daebf0a97957d67425  # v8.0.0
+        with:
+          yaml-file: home-assistant-voice.factory.yaml
+          version: 2026.9.0
+          complete-manifest: true
+          substitutions: firmware_version=${{ steps.version.outputs.version }}
+          release-summary: ${{ github.event_name == 'release' && github.event.release.body || '' }}
+          release-url: ${{ github.event_name == 'release' && github.event.release.html_url || '' }}
+
+      # Layout expected by upload-to-gh-release.yml: <artifact name>/<version>/
+      - name: Arrange files
+        env:
+          NAME: ${{ steps.esphome-build.outputs.original-name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p "output/$NAME/$VERSION"
+          mv ${{ steps.esphome-build.outputs.name }}/* "output/$NAME/$VERSION/"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: ${{ steps.esphome-build.outputs.original-name }}
+          path: output
 
   upload-to-release:
     name: Upload to Release

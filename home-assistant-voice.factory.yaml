@@ -2,6 +2,11 @@
 # Kept: improv over BLE/serial, so Wi-Fi saved on the device keeps working and a reset device can be set up again.
 # Firmware updates come from this repo's releases (GitHub Pages) instead of firmware.esphome.io.
 # Removed: the beta firmware switch and dashboard_import.
+substitutions:
+  # CI sets the release tag. Local builds are older than any release, so Home Assistant offers the release
+  # as an update (it treats "dev" as newer than any version).
+  firmware_version: 0.0.0-local
+
 packages:
   # This is an inline package to prefix the on_client_connected with the wait_until action
   # It must appear before the actual package so it becomes the orignal config and the
@@ -20,7 +25,7 @@ packages:
 esphome:
   project:
     name: Nabu Casa.Home Assistant Voice PE
-    version: dev  # Replaced with the release tag by CI
+    version: ${firmware_version}
 
 ota:
   - platform: http_request
