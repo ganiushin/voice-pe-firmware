@@ -16,6 +16,9 @@
 #ifdef USE_MEDIA_PLAYER
 #include "esphome/components/media_player/media_player.h"
 #endif
+#ifdef USE_VOICE_ASSISTANT_ANNOUNCEMENT_EVENTS
+#include "esphome/components/speaker_source/speaker_source_media_player.h"
+#endif
 #ifdef USE_MICRO_WAKE_WORD
 #include "esphome/components/micro_wake_word/micro_wake_word.h"
 #endif
@@ -127,6 +130,12 @@ class VoiceAssistant final : public Component {
   }
 #endif
 #ifdef USE_MEDIA_PLAYER
+#ifdef USE_VOICE_ASSISTANT_ANNOUNCEMENT_EVENTS
+  /// @brief Finish responses when the media player reports the announcement finished instead of guessing with timers
+  void set_announcement_media_player(speaker_source::SpeakerSourceMediaPlayer *media_player) {
+    this->announcement_media_player_ = media_player;
+  }
+#endif
   void set_media_player(media_player::MediaPlayer *media_player) {
     this->media_player_ = media_player;
     this->local_output_ = true;
@@ -191,6 +200,9 @@ class VoiceAssistant final : public Component {
   void set_auto_gain(uint8_t auto_gain) { this->auto_gain_ = auto_gain; }
   void set_volume_multiplier(float volume_multiplier) { this->volume_multiplier_ = volume_multiplier; }
   void set_conversation_timeout(uint32_t conversation_timeout) { this->conversation_timeout_ = conversation_timeout; }
+  void set_response_start_timeout(uint32_t response_start_timeout) {
+    this->response_start_timeout_ = response_start_timeout;
+  }
   void reset_conversation_id();
 
   Trigger<> *get_intent_end_trigger() { return &this->intent_end_trigger_; }
@@ -237,6 +249,9 @@ class VoiceAssistant final : public Component {
   void set_state_(State state, State desired_state);
   void signal_stop_();
   void start_playback_timeout_();
+#ifdef USE_VOICE_ASSISTANT_ANNOUNCEMENT_EVENTS
+  void on_announcement_finished_(speaker_source::AnnouncementResult result);
+#endif
 
   // Drains the exposed microphone audio and sends it to Home Assistant over the API in one loop() pass.
   void stream_api_audio_();
@@ -299,6 +314,10 @@ class VoiceAssistant final : public Component {
   bool started_streaming_tts_{false};
 
   MediaPlayerResponseState media_player_response_state_{MediaPlayerResponseState::IDLE};
+  bool response_success_{true};
+#endif
+#ifdef USE_VOICE_ASSISTANT_ANNOUNCEMENT_EVENTS
+  speaker_source::SpeakerSourceMediaPlayer *announcement_media_player_{nullptr};
 #endif
 
   bool local_output_{false};
@@ -327,6 +346,7 @@ class VoiceAssistant final : public Component {
   uint8_t auto_gain_;
   float volume_multiplier_;
   uint32_t conversation_timeout_;
+  uint32_t response_start_timeout_{30000};
 
   bool continuous_{false};
   bool silence_detection_;

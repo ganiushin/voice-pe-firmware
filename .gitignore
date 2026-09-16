@@ -1,0 +1,5 @@
+.venv/
+.esphome/
+test/secrets.yaml
+test/.esphome/
+__pycache__/

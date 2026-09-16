@@ -58,6 +58,13 @@ enum Pipeline : uint8_t {
   ANNOUNCEMENT_PIPELINE = 1,
 };
 
+/// @brief How the announcement pipeline finished playing everything it was asked to play
+enum class AnnouncementResult : uint8_t {
+  COMPLETED,  // All requested audio was played out to the DAC
+  STOPPED,    // A STOP command ended the announcement early
+  FAILED,     // A source errored, no source could play a URI, or the request was dropped
+};
+
 enum RepeatMode : uint8_t {
   REPEAT_OFF = 0,
   REPEAT_ONE = 1,
@@ -119,6 +126,18 @@ struct PipelineContext {
   // Atomic because it is written from the main loop/source tasks and read/decremented from the speaker playback
   // callback.
   std::atomic<uint32_t> pending_frames{0};
+
+  // Frames written to the speaker that have not yet been reported as played to the DAC. Unlike pending_frames, this
+  // keeps counting after the source goes idle, so it tells when the tail of the audio has actually left the speaker.
+  std::atomic<uint32_t> unplayed_frames{0};
+
+  // Tracks one announcement request until the pipeline is completely quiet again. Main loop only.
+  bool request_active{false};
+  bool request_started{false};
+  bool request_failed{false};
+  bool request_stopped{false};
+  // millis() when only unplayed frames were left to wait for; 0 if not waiting
+  uint32_t drain_start_ms{0};
 
   /// @brief Check if this pipeline is configured (has a speaker assigned)
   bool is_configured() const { return this->speaker != nullptr; }
@@ -182,6 +201,12 @@ class SpeakerSourceMediaPlayer final : public Component, public media_player::Me
 
   void set_playlist_delay_ms(uint8_t pipeline, uint32_t delay_ms);
 
+  /// @brief Registers a callback fired on the main loop once the announcement pipeline has finished everything it was
+  /// asked to play: the playlist is exhausted, no source is active or pending, and the audio was played out to the DAC.
+  template<typename F> void add_on_announcement_finished_callback(F &&callback) {
+    this->announcement_finished_callback_.add(std::forward<F>(callback));
+  }
+
  protected:
   // Callbacks from source bindings (pipeline index is captured at binding creation time)
   size_t handle_media_output_(uint8_t pipeline, media_source::MediaSource *source, const uint8_t *data, size_t length,
@@ -193,6 +218,15 @@ class SpeakerSourceMediaPlayer final : public Component, public media_player::Me
   void handle_play_uri_request_(uint8_t pipeline, const std::string &uri);
 
   void handle_speaker_playback_callback_(uint32_t frames, int64_t timestamp, uint8_t pipeline);
+
+  /// @brief Aborts the current item after its source reported an error
+  void handle_source_error_(uint8_t pipeline, media_source::MediaSource *source);
+
+  /// @brief Fires the announcement finished callback once the announcement pipeline is quiet
+  void check_announcement_finished_();
+
+  /// @brief Stops the pipeline speaker and drops the frame accounting for audio that will never be played
+  void stop_speaker_(uint8_t pipeline);
 
   // Receives commands from HA or from the voice assistant component
   // Sends commands to the media_control_command_queue_
@@ -245,6 +279,8 @@ class SpeakerSourceMediaPlayer final : public Component, public media_player::Me
   Trigger<> mute_trigger_;
   Trigger<> unmute_trigger_;
   Trigger<float> volume_trigger_;
+
+  CallbackManager<void(AnnouncementResult)> announcement_finished_callback_;
 
   // The amount to change the volume on volume up/down commands
   float volume_increment_;

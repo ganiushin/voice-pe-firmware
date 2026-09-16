@@ -12,9 +12,10 @@ from esphome.const import (
     CONF_ON_ERROR,
     CONF_ON_IDLE,
     CONF_ON_START,
+    CONF_PLATFORM,
     CONF_SPEAKER,
 )
-from esphome.core import ID
+from esphome.core import CORE, ID
 from esphome.cpp_generator import MockObj, TemplateArgsType
 from esphome.types import ConfigType
 
@@ -49,6 +50,7 @@ CONF_MICRO_WAKE_WORD = "micro_wake_word"
 CONF_WAKE_WORD = "wake_word"
 
 CONF_CONVERSATION_TIMEOUT = "conversation_timeout"
+CONF_RESPONSE_START_TIMEOUT = "response_start_timeout"
 
 CONF_ON_TIMER_STARTED = "on_timer_started"
 CONF_ON_TIMER_UPDATED = "on_timer_updated"
@@ -127,6 +129,10 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(
                 CONF_CONVERSATION_TIMEOUT, default="300s"
             ): cv.positive_time_period_milliseconds,
+            # Guard for a speaker_source media player that never reports back about a response
+            cv.Optional(
+                CONF_RESPONSE_START_TIMEOUT, default="30s"
+            ): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_VOLUME_MULTIPLIER, default=1.0): cv.float_range(
                 min=0.0, min_included=False
             ),
@@ -202,6 +208,14 @@ FINAL_VALIDATE_SCHEMA = cv.All(
 )
 
 
+def _is_speaker_source_media_player(media_player_id) -> bool:
+    return any(
+        conf.get(CONF_ID) == media_player_id
+        and conf.get(CONF_PLATFORM) == "speaker_source"
+        for conf in CORE.config.get("media_player", [])
+    )
+
+
 async def to_code(config: ConfigType) -> None:
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
@@ -221,6 +235,9 @@ async def to_code(config: ConfigType) -> None:
     if CONF_MEDIA_PLAYER in config:
         mp = await cg.get_variable(config[CONF_MEDIA_PLAYER])
         cg.add(var.set_media_player(mp))
+        if _is_speaker_source_media_player(config[CONF_MEDIA_PLAYER]):
+            cg.add_define("USE_VOICE_ASSISTANT_ANNOUNCEMENT_EVENTS")
+            cg.add(var.set_announcement_media_player(mp))
 
     if CONF_SPEAKER in config:
         spkr = await cg.get_variable(config[CONF_SPEAKER])
@@ -235,6 +252,7 @@ async def to_code(config: ConfigType) -> None:
     cg.add(var.set_auto_gain(config[CONF_AUTO_GAIN]))
     cg.add(var.set_volume_multiplier(config[CONF_VOLUME_MULTIPLIER]))
     cg.add(var.set_conversation_timeout(config[CONF_CONVERSATION_TIMEOUT]))
+    cg.add(var.set_response_start_timeout(config[CONF_RESPONSE_START_TIMEOUT]))
 
     if CONF_ON_LISTENING in config:
         await automation.build_automation(

@@ -63,6 +63,11 @@ void VoiceAssistant::setup() {
           }
           break;
         default:
+#ifdef USE_VOICE_ASSISTANT_ANNOUNCEMENT_EVENTS
+          if (this->announcement_media_player_ != nullptr) {
+            break;  // The announcement finished event decides when the response is over
+          }
+#endif
           if (this->media_player_response_state_ == MediaPlayerResponseState::PLAYING) {
             // No longer announcing the TTS response
             this->media_player_response_state_ = MediaPlayerResponseState::FINISHED;
@@ -72,7 +77,30 @@ void VoiceAssistant::setup() {
     });
   }
 #endif
+#ifdef USE_VOICE_ASSISTANT_ANNOUNCEMENT_EVENTS
+  if (this->announcement_media_player_ != nullptr) {
+    this->announcement_media_player_->add_on_announcement_finished_callback(
+        [this](speaker_source::AnnouncementResult result) { this->on_announcement_finished_(result); });
+  }
+#endif
 }
+
+#ifdef USE_VOICE_ASSISTANT_ANNOUNCEMENT_EVENTS
+void VoiceAssistant::on_announcement_finished_(speaker_source::AnnouncementResult result) {
+  if (this->media_player_response_state_ != MediaPlayerResponseState::URL_SENT &&
+      this->media_player_response_state_ != MediaPlayerResponseState::PLAYING) {
+    return;  // Not waiting for a response, e.g. a wake word or button sound finished
+  }
+  this->cancel_timeout("playing");
+  this->response_success_ = (result == speaker_source::AnnouncementResult::COMPLETED);
+  if (!this->response_success_) {
+    // Stopped by the user or failed: don't reopen the microphone
+    ESP_LOGD(TAG, "Response did not complete, ending the conversation");
+    this->continue_conversation_ = false;
+  }
+  this->media_player_response_state_ = MediaPlayerResponseState::FINISHED;
+}
+#endif
 
 float VoiceAssistant::get_setup_priority() const { return setup_priority::AFTER_CONNECTION; }
 
@@ -482,12 +510,21 @@ void VoiceAssistant::loop() {
           this->set_state_(State::RESPONSE_FINISHED, State::RESPONSE_FINISHED);
 
           api::VoiceAssistantAnnounceFinished msg;
-          msg.success = true;
-          if (!this->api_client_->send_message(msg)) {
+          msg.success = this->response_success_;
+          this->response_success_ = true;
+          if (this->api_client_ != nullptr && !this->api_client_->send_message(msg)) {
             API_LOG_MSG_DROPPED(TAG, "Announce-finished");
           }
           break;
         }
+#ifdef USE_VOICE_ASSISTANT_ANNOUNCEMENT_EVENTS
+        if (this->announcement_media_player_ != nullptr) {
+          if (playing) {
+            this->cancel_timeout("playing");  // Audible now; only the finished event ends the response
+          }
+          break;
+        }
+#endif
       }
 #endif
       if (playing) {
@@ -755,6 +792,27 @@ void VoiceAssistant::signal_stop_() {
 }
 
 void VoiceAssistant::start_playback_timeout_() {
+#ifdef USE_VOICE_ASSISTANT_ANNOUNCEMENT_EVENTS
+  if (this->announcement_media_player_ != nullptr) {
+    // Guard only: fires if the media player never reports back about the response. Normally the announcement
+    // finished event arrives first, including when playback fails or is stopped.
+    this->set_timeout("playing", this->response_start_timeout_, [this]() {
+      if (this->media_player_response_state_ != MediaPlayerResponseState::URL_SENT) {
+        return;
+      }
+      ESP_LOGW(TAG, "Response did not start playing in time");
+      this->continue_conversation_ = false;
+      this->response_success_ = false;
+      this->media_player_response_state_ = MediaPlayerResponseState::FINISHED;
+      // Keep a late start from playing after the session ended
+      this->media_player_->make_call()
+          .set_command(media_player::MEDIA_PLAYER_COMMAND_STOP)
+          .set_announcement(true)
+          .perform();
+    });
+    return;
+  }
+#endif
   this->set_timeout("playing", 2000, [this]() {
     this->cancel_timeout("speaker-timeout");
     this->set_state_(State::RESPONSE_FINISHED, State::RESPONSE_FINISHED);

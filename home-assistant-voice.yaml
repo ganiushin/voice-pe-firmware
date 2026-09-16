@@ -1,4 +1,6 @@
 substitutions:
+  # Where the patched speaker_source / voice_assistant components come from
+  voice_pe_components_source: github://ganiushin/voice-pe-firmware@main
   # Phases of the Voice Assistant
   # The voice assistant is ready to be triggered by a wake word
   voice_assist_idle_phase_id: '1'
@@ -38,7 +40,7 @@ esphome:
   name: home-assistant-voice
   friendly_name: Home Assistant Voice
   name_add_mac_suffix: true
-  min_version: 2026.5.0
+  min_version: 2026.9.0
   on_boot:
     priority: 375
     then:
@@ -1472,33 +1474,18 @@ script:
           }
           id(is_timer_active) = output;
 
-  # Script used activate the stop word if the TTS step is long.
-  # Why is this wrapped on a script?
-  #   Becasue we want to stop the sequence if the TTS step is faster than that.
-  #   This allows us to prevent having the deactivation of the stop word before its own activation.
-  - id: activate_stop_word_once
+  # The stop word is active from the first reply until the whole conversation is over,
+  # so "stop" works both while the device speaks and while it listens for a follow-up.
+  - id: enable_conversation_stop_word
     then:
-      - wait_until:
-          condition:
-            media_player.is_announcing:
-              id: external_media_player
-          timeout: 5s
-      - delay: 1s
-      # Enable stop wake word
+      - micro_wake_word.enable_model: stop
+  - id: disable_conversation_stop_word
+    then:
       - if:
           condition:
             switch.is_off: timer_ringing
           then:
-            - micro_wake_word.enable_model: stop
-            - wait_until:
-                not:
-                  media_player.is_announcing:
-                    id: external_media_player
-            - if:
-                condition:
-                  switch.is_off: timer_ringing
-                then:
-                  - micro_wake_word.disable_model: stop
+            - micro_wake_word.disable_model: stop
 
 i2s_audio:
   - id: i2s_output
@@ -1686,6 +1673,12 @@ external_components:
     components:
       - voice_kit
     refresh: 0s
+  # speaker_source and voice_assistant patched so the microphone only reopens after a response was played out
+  - source: ${voice_pe_components_source}
+    components:
+      - speaker_source
+      - voice_assistant
+    refresh: 1d
 
 audio_dac:
   - platform: aic3204
@@ -1722,14 +1715,13 @@ micro_wake_word:
                 switch.is_on: timer_ringing
               then:
                 - switch.turn_off: timer_ringing
-              # Stop voice assistant if running
               else:
+                # Stop whatever is going on: the conversation (reply or follow-up listening) or another announcement
                 - if:
                     condition:
                       voice_assistant.is_running:
                     then:
-                      voice_assistant.stop:
-                    # Stop any other media player announcement
+                      - voice_assistant.stop:
                     else:
                       - if:
                           condition:
@@ -1739,19 +1731,33 @@ micro_wake_word:
                             - media_player.stop:
                                 announcement: true
                                 id: external_media_player
-                          # Start the voice assistant and play the wake sound, if enabled
-                          else:
-                            - if:
-                                condition:
-                                  switch.is_on: wake_sound
-                                then:
-                                  - script.execute:
-                                      id: play_sound
-                                      priority: true
-                                      sound_file: "wake_word_triggered_sound"
-                                  - delay: 300ms
-                            - voice_assistant.start:
-                                wake_word: !lambda return wake_word;
+                # The stop word only stops. A wake word interrupts and starts listening right away.
+                - if:
+                    condition:
+                      lambda: return wake_word != "Stop";
+                    then:
+                      # Wait for the interrupted reply to actually go silent, so it isn't recorded.
+                      # The timeout is only a guard; the voice assistant finishes on the media player's event.
+                      - wait_until:
+                          condition:
+                            and:
+                              - not:
+                                  voice_assistant.is_running:
+                              - not:
+                                  media_player.is_announcing:
+                                    id: external_media_player
+                          timeout: 5s
+                      - if:
+                          condition:
+                            switch.is_on: wake_sound
+                          then:
+                            - script.execute:
+                                id: play_sound
+                                priority: true
+                                sound_file: "wake_word_triggered_sound"
+                            - delay: 300ms
+                      - voice_assistant.start:
+                          wake_word: !lambda return wake_word;
 
 select:
   - platform: template
@@ -1795,6 +1801,8 @@ voice_assistant:
   media_player: external_media_player
   micro_wake_word: mww
   use_wake_word: false
+  # Guard only: ends the conversation if the media player never reports back about a response
+  response_start_timeout: 30s
   noise_suppression_level: 0
   auto_gain: 0 dbfs
   volume_multiplier: 1
@@ -1851,8 +1859,7 @@ voice_assistant:
         then:
           - lambda: id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
           - script.execute: control_leds
-          # Start a script that would potentially enable the stop word if the response is longer than a second
-          - script.execute: activate_stop_word_once
+          - script.execute: enable_conversation_stop_word
   on_tts_start:
     - if:
         condition:
@@ -1861,13 +1868,13 @@ voice_assistant:
         then:
           - lambda: id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
           - script.execute: control_leds
-          # Start a script that would potentially enable the stop word if the response is longer than a second
-          - script.execute: activate_stop_word_once
+          - script.execute: enable_conversation_stop_word
   # When the voice assistant ends ...
   on_end:
     - wait_until:
         not:
           voice_assistant.is_running:
+    - script.execute: disable_conversation_stop_word
     # Stop ducking audio.
     - mixer_speaker.apply_ducking:
         id: media_mixing_input

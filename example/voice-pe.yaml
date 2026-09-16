@@ -1,0 +1,21 @@
+# Device config for ESPHome Device Builder.
+# Replace the contents of your adopted Voice PE config with this file (keep your own api key and wifi secrets).
+substitutions:
+  name: home-assistant-voice
+  friendly_name: Home Assistant Voice
+
+packages:
+  voice_pe: github://ganiushin/voice-pe-firmware/home-assistant-voice.yaml@main
+
+esphome:
+  name: ${name}
+  name_add_mac_suffix: false
+  friendly_name: ${friendly_name}
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password

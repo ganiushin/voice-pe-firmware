@@ -2,14 +2,22 @@
 
 #ifdef USE_ESP32
 
+#include "esphome/core/hal.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
 
 #include <algorithm>
+#include <cinttypes>
 
 namespace esphome::speaker_source {
 
 static constexpr uint32_t MEDIA_CONTROLS_QUEUE_LENGTH = 20;
+
+// Resampling rounds frame counts in the playback callbacks, so a few frames may never be reported as played
+static constexpr uint32_t UNPLAYED_TOLERANCE_MS = 10;
+// Guard for a frame accounting mismatch: once the speaker has stopped, the remaining frames must be played out within
+// their own duration plus this margin (output buffers and DAC)
+static constexpr uint32_t DRAIN_GUARD_MARGIN_MS = 500;
 
 static const char *const TAG = "speaker_source_media_player";
 
@@ -88,6 +96,13 @@ void SpeakerSourceMediaPlayer::setup() {
 void SpeakerSourceMediaPlayer::handle_speaker_playback_callback_(uint32_t frames, int64_t timestamp, uint8_t pipeline) {
   PipelineContext &ps = this->pipelines_[pipeline];
 
+  uint32_t unplayed = ps.unplayed_frames.load(std::memory_order_relaxed);
+  uint32_t played;
+  do {
+    played = std::min(frames, unplayed);
+  } while (played > 0 &&
+           !ps.unplayed_frames.compare_exchange_weak(unplayed, unplayed - played, std::memory_order_relaxed));
+
   // Load once so the null check and use below are consistent
   media_source::MediaSource *active_source = ps.active_source.load(std::memory_order_relaxed);
   if (active_source == nullptr) {
@@ -165,9 +180,16 @@ void SpeakerSourceMediaPlayer::handle_media_state_changed_(uint8_t pipeline, med
         this->queue_command_(MediaPlayerControlCommand::PLAYLIST_ADVANCE, pipeline);
       }
     }
+  } else if (state == media_source::MediaSourceState::ERROR) {
+    this->handle_source_error_(pipeline, source);
   } else if (state == media_source::MediaSourceState::PLAYING) {
+    // A source stopped before it started must not become active
+    if (ps.stopping_source == source) {
+      return;
+    }
     // Source started playing - make it the active source if no one else is active
     if (ps.active_source == nullptr) {
+      ps.request_started = true;
       ps.active_source = source;
       ps.last_source = nullptr;
 
@@ -177,6 +199,94 @@ void SpeakerSourceMediaPlayer::handle_media_state_changed_(uint8_t pipeline, med
       }
     }
   }
+}
+
+// THREAD CONTEXT: Called from main loop
+void SpeakerSourceMediaPlayer::handle_source_error_(uint8_t pipeline, media_source::MediaSource *source) {
+  PipelineContext &ps = this->pipelines_[pipeline];
+  if (ps.active_source != source && ps.pending_source != source) {
+    return;
+  }
+
+  // Without this the pipeline would wait forever on a source that never plays or goes idle
+  ESP_LOGW(TAG, "Pipeline %u: source error, skipping item", pipeline);
+  ps.request_failed = true;
+  if (ps.pending_source == source) {
+    ps.pending_source = nullptr;
+  }
+  if (ps.active_source == source) {
+    ps.last_source = source;
+    ps.active_source = nullptr;
+  }
+  ps.stopping_source = source;
+  source->handle_command(media_source::MediaSourceCommand::STOP);
+  this->stop_speaker_(pipeline);
+  this->queue_command_(MediaPlayerControlCommand::PLAYLIST_ADVANCE, pipeline);
+}
+
+// THREAD CONTEXT: Called from main loop
+void SpeakerSourceMediaPlayer::stop_speaker_(uint8_t pipeline) {
+  PipelineContext &ps = this->pipelines_[pipeline];
+  ps.speaker->stop();
+  ps.unplayed_frames.store(0, std::memory_order_relaxed);
+}
+
+// THREAD CONTEXT: Called from main loop (loop)
+void SpeakerSourceMediaPlayer::check_announcement_finished_() {
+  PipelineContext &ps = this->pipelines_[ANNOUNCEMENT_PIPELINE];
+  if (!ps.request_active) {
+    return;
+  }
+
+  // Quiet means: no queued commands, nothing left in the playlist, no source playing or starting, and every frame
+  // written to the speaker has been played out to the DAC.
+  if (uxQueueMessagesWaiting(this->media_control_command_queue_) > 0) {
+    return;
+  }
+  if (ps.playlist_index < ps.playlist.size()) {
+    return;
+  }
+  if (ps.active_source != nullptr || ps.pending_source != nullptr) {
+    return;
+  }
+  if (!ps.speaker->is_stopped()) {
+    ps.drain_start_ms = 0;
+    return;
+  }
+  const audio::AudioStreamInfo &stream_info = ps.speaker->get_audio_stream_info();
+  const uint32_t unplayed = ps.unplayed_frames.load(std::memory_order_relaxed);
+  if (unplayed > stream_info.ms_to_frames(UNPLAYED_TOLERANCE_MS)) {
+    const uint32_t now = millis();
+    if (ps.drain_start_ms == 0) {
+      ps.drain_start_ms = now == 0 ? 1 : now;
+      return;
+    }
+    const uint32_t unplayed_ms =
+        static_cast<uint32_t>(uint64_t{unplayed} * 1000 / std::max<uint32_t>(stream_info.get_sample_rate(), 1));
+    if (now - ps.drain_start_ms < unplayed_ms + DRAIN_GUARD_MARGIN_MS) {
+      return;
+    }
+    ESP_LOGW(TAG, "%" PRIu32 " announcement frames were never reported as played", unplayed);
+    ps.unplayed_frames.store(0, std::memory_order_relaxed);
+  }
+  ps.drain_start_ms = 0;
+
+  AnnouncementResult result = AnnouncementResult::COMPLETED;
+  if (ps.request_stopped) {
+    result = AnnouncementResult::STOPPED;
+  } else if (ps.request_failed || !ps.request_started) {
+    result = AnnouncementResult::FAILED;
+  }
+  ps.request_active = false;
+  ps.request_started = false;
+  ps.request_failed = false;
+  ps.request_stopped = false;
+
+  ESP_LOGD(TAG, "Announcement finished (%s)",
+           result == AnnouncementResult::COMPLETED ? "completed"
+           : result == AnnouncementResult::STOPPED ? "stopped"
+                                                   : "failed");
+  this->announcement_finished_callback_.call(result);
 }
 
 // THREAD CONTEXT: Called from media source decode task thread (not main loop).
@@ -200,6 +310,7 @@ size_t SpeakerSourceMediaPlayer::handle_media_output_(uint8_t pipeline, media_so
     if (bytes_written > 0) {
       // Track frames sent to speaker for this source
       ps.pending_frames.fetch_add(stream_info.bytes_to_frames(bytes_written), std::memory_order_relaxed);
+      ps.unplayed_frames.fetch_add(stream_info.bytes_to_frames(bytes_written), std::memory_order_relaxed);
     }
     return bytes_written;
   }
@@ -284,6 +395,10 @@ void SpeakerSourceMediaPlayer::loop() {
     this->publish_state();
     ESP_LOGD(TAG, "State changed to %s", media_player::media_player_state_to_string(this->state));
   }
+
+  if (ann_ps.is_configured()) {
+    this->check_announcement_finished_();
+  }
 }
 
 media_source::MediaSource *SpeakerSourceMediaPlayer::find_source_for_uri_(const std::string &uri, uint8_t pipeline) {
@@ -309,6 +424,8 @@ bool SpeakerSourceMediaPlayer::try_execute_play_uri_(const std::string &uri, uin
   if (target_source == nullptr) {
     ESP_LOGW(TAG, "No source for URI");
     ESP_LOGV(TAG, "URI: %s", uri.c_str());
+    this->pipelines_[pipeline].request_failed = true;
+    this->queue_command_(MediaPlayerControlCommand::PLAYLIST_ADVANCE, pipeline);
     return true;  // Remove from queue (unrecoverable)
   }
 
@@ -325,7 +442,7 @@ bool SpeakerSourceMediaPlayer::try_execute_play_uri_(const std::string &uri, uin
         ESP_LOGV(TAG, "Pipeline %u: stopping active source", pipeline);
         ps.stopping_source = active_source;
         active_source->handle_command(media_source::MediaSourceCommand::STOP);
-        ps.speaker->stop();
+        this->stop_speaker_(pipeline);
       }
       return false;  // Leave in queue, retry next loop
     }
@@ -339,7 +456,7 @@ bool SpeakerSourceMediaPlayer::try_execute_play_uri_(const std::string &uri, uin
       ESP_LOGV(TAG, "Pipeline %u: target source busy, stopping", pipeline);
       ps.stopping_source = target_source;
       target_source->handle_command(media_source::MediaSourceCommand::STOP);
-      ps.speaker->stop();
+      this->stop_speaker_(pipeline);
     }
     return false;  // Leave in queue, retry next loop
   }
@@ -359,6 +476,7 @@ bool SpeakerSourceMediaPlayer::try_execute_play_uri_(const std::string &uri, uin
   if (!target_source->play_uri(uri)) {
     ESP_LOGE(TAG, "Pipeline %u: Failed to play URI: %s", pipeline, uri.c_str());
     ps.pending_source = nullptr;
+    ps.request_failed = true;
     this->queue_command_(MediaPlayerControlCommand::PLAYLIST_ADVANCE, pipeline);
   }
 
@@ -562,6 +680,9 @@ void SpeakerSourceMediaPlayer::handle_player_command_(media_player::MediaPlayerC
     }
 
     case media_player::MEDIA_PLAYER_COMMAND_STOP: {
+      if (ps.request_active) {
+        ps.request_stopped = true;
+      }
       if (!has_internal_playlist) {
         this->cancel_timeout(PIPELINE_TIMEOUT_IDS[pipeline]);
         ps.playlist.clear();
@@ -570,6 +691,15 @@ void SpeakerSourceMediaPlayer::handle_player_command_(media_player::MediaPlayerC
       }
       if (target_source != nullptr) {
         target_source->handle_command(media_source::MediaSourceCommand::STOP);
+      }
+      // A source that is still buffering isn't active yet; without this it would start playing after the stop
+      media_source::MediaSource *pending_source = ps.pending_source;
+      if (pending_source != nullptr) {
+        ps.pending_source = nullptr;
+        ps.stopping_source = pending_source;
+        if (pending_source != target_source) {
+          pending_source->handle_command(media_source::MediaSourceCommand::STOP);
+        }
       }
       break;
     }
@@ -712,9 +842,17 @@ void SpeakerSourceMediaPlayer::control(const media_player::MediaPlayerCall &call
     // can easily exceed 500 bytes). Deleted in process_control_queue_() after the command is consumed. FreeRTOS queues
     // require items to be copyable, so we store a pointer to the string in the queue rather than the string itself.
     control_command.data.uri = new std::string(media_url.value());
+    PipelineContext &ps = this->pipelines_[control_command.pipeline];
+    if (control_command.pipeline == ANNOUNCEMENT_PIPELINE && !ps.request_active) {
+      ps.request_active = true;
+      ps.request_started = false;
+      ps.request_failed = false;
+      ps.request_stopped = false;
+    }
     if (xQueueSend(this->media_control_command_queue_, &control_command, 0) != pdTRUE) {
       delete control_command.data.uri;
       ESP_LOGE(TAG, "Queue full, URI dropped");
+      ps.request_failed = true;
     }
     return;
   }
