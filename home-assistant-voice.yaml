@@ -1781,6 +1781,34 @@ micro_wake_word:
                           wake_word: !lambda return wake_word;
 
 select:
+  # Processing of the microphone channel that Home Assistant sends to speech-to-text (channel 0).
+  # Wyoming STT always takes channel 0, so this is how to compare what works best for the STT engine.
+  # The wake word model keeps using channel 1 (echo cancellation + noise suppression, no gain control).
+  - platform: template
+    name: "Voice processing"
+    id: voice_processing
+    icon: "mdi:waveform"
+    optimistic: true
+    initial_option: Full
+    restore_value: true
+    entity_category: config
+    options:
+      - Full
+      - Without gain control
+      - Echo cancellation only
+    on_value:
+      - lambda: |-
+          auto stage = voice_kit::PIPELINE_STAGE_AGC;
+          if (x == "Without gain control") {
+            stage = voice_kit::PIPELINE_STAGE_NS;
+          } else if (x == "Echo cancellation only") {
+            stage = voice_kit::PIPELINE_STAGE_AEC;
+          }
+          id(voice_kit_component).set_channel_0_stage(stage);
+          // Before voice_kit is set up, its own setup writes the stage set here
+          if (id(voice_kit_component).is_ready()) {
+            id(voice_kit_component).write_pipeline_stages();
+          }
   - platform: template
     name: "Wake word sensitivity"
     id: wake_word_sensitivity
