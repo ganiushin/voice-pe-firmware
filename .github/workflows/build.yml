@@ -29,6 +29,8 @@ jobs:
     if: github.event_name == 'release'
     needs:
       - build-firmware
+    permissions:
+      contents: write
     uses: esphome/workflows/.github/workflows/upload-to-gh-release.yml@0fdd5e311b7e744069166696072a1a9cbc5fbeb6  # 2026.8.1
     with:
       version: ${{ github.event.release.tag_name }}
