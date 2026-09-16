@@ -24,6 +24,12 @@ template<typename... Ts> class SetPlaylistDelayAction final : public Action<Ts..
   SpeakerSourceMediaPlayer *parent_;
 };
 
+template<typename... Ts>
+class IsAnnouncementActiveCondition final : public Condition<Ts...>, public Parented<SpeakerSourceMediaPlayer> {
+ public:
+  bool check(const Ts &...x) override { return this->parent_->is_announcement_active(); }
+};
+
 }  // namespace esphome::speaker_source
 
 #endif  // USE_ESP32

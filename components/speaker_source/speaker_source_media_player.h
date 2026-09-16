@@ -207,6 +207,9 @@ class SpeakerSourceMediaPlayer final : public Component, public media_player::Me
     this->announcement_finished_callback_.add(std::forward<F>(callback));
   }
 
+  /// @brief True from the moment an announcement is requested until its announcement finished callback fires
+  bool is_announcement_active() const { return this->pipelines_[ANNOUNCEMENT_PIPELINE].request_active; }
+
  protected:
   // Callbacks from source bindings (pipeline index is captured at binding creation time)
   size_t handle_media_output_(uint8_t pipeline, media_source::MediaSource *source, const uint8_t *data, size_t length,

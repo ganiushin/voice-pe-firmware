@@ -62,6 +62,9 @@ _PIPELINE_INFO = {
 SetPlaylistDelayAction = speaker_source_ns.class_(
     "SetPlaylistDelayAction", automation.Action
 )
+IsAnnouncementActiveCondition = speaker_source_ns.class_(
+    "IsAnnouncementActiveCondition", automation.Condition
+)
 
 
 _validate_pipeline = media_player.validate_preferred_format(
@@ -253,4 +256,23 @@ async def set_playlist_delay_action_to_code(
     template_ = await cg.templatable(config[CONF_DELAY], args, cg.uint32)
     cg.add(var.set_delay(template_))
 
+    return var
+
+
+@automation.register_condition(
+    "speaker_source.is_announcement_active",
+    IsAnnouncementActiveCondition,
+    cv.maybe_simple_value(
+        {cv.GenerateID(): cv.use_id(SpeakerSourceMediaPlayer)},
+        key=CONF_ID,
+    ),
+)
+async def is_announcement_active_to_code(
+    config: ConfigType,
+    condition_id: ID,
+    template_arg: cg.TemplateArguments,
+    args: TemplateArgsType,
+) -> MockObj:
+    var = cg.new_Pvariable(condition_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
     return var

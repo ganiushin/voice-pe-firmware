@@ -1744,8 +1744,7 @@ micro_wake_word:
                               - not:
                                   voice_assistant.is_running:
                               - not:
-                                  media_player.is_announcing:
-                                    id: external_media_player
+                                  speaker_source.is_announcement_active: external_media_player
                           timeout: 5s
                       - if:
                           condition:
@@ -1755,7 +1754,12 @@ micro_wake_word:
                                 id: play_sound
                                 priority: true
                                 sound_file: "wake_word_triggered_sound"
-                            - delay: 300ms
+                            # Start listening once the wake sound has been played out, so it isn't recorded
+                            - wait_until:
+                                condition:
+                                  not:
+                                    speaker_source.is_announcement_active: external_media_player
+                                timeout: 5s
                       - voice_assistant.start:
                           wake_word: !lambda return wake_word;
 

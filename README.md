@@ -26,6 +26,9 @@
 * `voice_assistant` ждёт это событие.
   * `completed`: если ответ был вопросом, открывается микрофон.
   * `stopped` или `failed`: разговор завершается, микрофон не открывается.
+* Условие `speaker_source.is_announcement_active` истинно от запроса звука до ухода последнего сэмпла в DAC.
+  По нему колонка начинает слушать после звука пробуждения (вместо `delay: 300ms`)
+  и после прерванного ответа.
 * Попутно исправлено в `speaker_source`:
   * `stop` во время буферизации раньше не останавливал источник, и ответ начинал играть после остановки;
   * ошибка источника раньше навсегда подвешивала плейлист объявлений.
@@ -36,7 +39,7 @@
 |---|---|---|
 | `voice_assistant.response_start_timeout` | 30 с | Ответ так и не начал играть: разговор завершается, объявление останавливается |
 | слив хвоста в `speaker_source` | длительность недоигранных сэмплов + 500 мс | Счётчик сэмплов разошёлся: событие отправляется с предупреждением в логе |
-| ожидание тишины при перебивании словом пробуждения | 5 с | Не даёт автоматизации зависнуть |
+| ожидание тишины при перебивании и после звука пробуждения | 5 с | Не даёт автоматизации зависнуть |
 
 ## Поведение
 
@@ -53,27 +56,41 @@
 
 ## Установка
 
-В ESPHome Device Builder замените конфиг вашей Voice PE содержимым [`example/voice-pe.yaml`](example/voice-pe.yaml).
-Ключ API и Wi-Fi оставьте свои. Нужен ESPHome 2026.9.0 или новее.
+Отдельный аддон не нужен. Колонка остаётся в Home Assistant той же:
+* имя остаётся `home-assistant-voice-XXXXXX`;
+* ключ API — тот, что HA уже записал на колонку;
+* Wi-Fi берётся из памяти колонки;
+* improv по BLE и USB сохранён.
+
+Автообновление со стокового сервера убрано, иначе HA вернул бы стоковую прошивку.
+Чтобы вернуться на сток, прошейте его через [web installer](https://esphome.github.io/home-assistant-voice-pe/).
+
+Нужен ESPHome 2026.9.0 или новее. Компоненты скопированы из 2026.9.0, так что на более новой версии ESPHome их, возможно, придётся перенести.
+
+### Вариант 1: ESPHome Device Builder
+Создайте устройство с содержимым [`example/voice-pe.yaml`](example/voice-pe.yaml) и нажмите Install → Wirelessly:
 
 ```yaml
 packages:
-  voice_pe: github://ganiushin/voice-pe-firmware/home-assistant-voice.yaml@main
+  voice_pe: github://ganiushin/voice-pe-firmware/home-assistant-voice.factory.yaml@main
 ```
 
-Компоненты скопированы из ESPHome 2026.9.0. На другой версии ESPHome сборка может не пройти, и их придётся перенести на новую версию.
-
-## Локальная сборка
-
+### Вариант 2: с компьютера по OTA, без Device Builder
 ```bash
 uv venv -p 3.13 .venv && uv pip install -p .venv esphome==2026.9.0
-cp test/secrets.example.yaml test/secrets.yaml   # заполнить
-.venv/bin/esphome compile test/local-build.yaml
+.venv/bin/esphome run test/local-build.yaml --device home-assistant-voice-XXXXXX.local   # или IP
 ```
+Стоковая прошивка принимает OTA без пароля.
+
+### Вариант 3: по USB
+Соберите прошивку (`esphome compile test/local-build.yaml`) и прошейте
+`test/.esphome/build/home-assistant-voice/build/firmware.factory.bin` через https://web.esphome.io.
 
 ## Структура
 
+* `home-assistant-voice.factory.yaml`: полный конфиг устройства (стоковый factory без автообновления).
 * `home-assistant-voice.yaml`: пакет Voice PE с изменениями.
+* `test/local-build.yaml`: то же, но из локальной копии.
 * `components/`: изменённые `speaker_source` и `voice_assistant`.
 * `upstream/`: нетронутые исходники, от которых сделаны изменения.
   Посмотреть все правки: `diff -ru upstream/esphome-2026.9.0 components` и
