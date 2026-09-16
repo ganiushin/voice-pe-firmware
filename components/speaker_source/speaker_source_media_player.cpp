@@ -680,9 +680,6 @@ void SpeakerSourceMediaPlayer::handle_player_command_(media_player::MediaPlayerC
     }
 
     case media_player::MEDIA_PLAYER_COMMAND_STOP: {
-      if (ps.request_active) {
-        ps.request_stopped = true;
-      }
       if (!has_internal_playlist) {
         this->cancel_timeout(PIPELINE_TIMEOUT_IDS[pipeline]);
         ps.playlist.clear();
@@ -880,6 +877,14 @@ void SpeakerSourceMediaPlayer::control(const media_player::MediaPlayerCall &call
         this->set_volume_(std::max(0.0f, this->volume - this->volume_increment_));
         break;
       default:
+        // Mark the stop when it is issued: it applies to what was requested before it, not to a URI queued right
+        // after it (e.g. a sound played with priority stops the current one first)
+        if (cmd.value() == media_player::MEDIA_PLAYER_COMMAND_STOP) {
+          PipelineContext &ps = this->pipelines_[control_command.pipeline];
+          if (ps.request_active) {
+            ps.request_stopped = true;
+          }
+        }
         // Queue command for processing in loop()
         control_command.type = MediaPlayerControlCommand::SEND_COMMAND;
         control_command.data.command = cmd.value();

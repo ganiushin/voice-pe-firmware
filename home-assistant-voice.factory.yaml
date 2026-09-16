@@ -20,7 +20,7 @@ packages:
 esphome:
   project:
     name: Nabu Casa.Home Assistant Voice PE
-    version: 26.6.0-ganiushin.2
+    version: 26.6.0-ganiushin.3
 
 wifi:
   on_connect:
