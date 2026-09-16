@@ -1,7 +1,7 @@
 # Full device config, based on the stock home-assistant-voice.factory.yaml (26.6.0).
 # Kept: improv over BLE/serial, so Wi-Fi saved on the device keeps working and a reset device can be set up again.
-# Removed: firmware updates from firmware.esphome.io (they would replace this firmware with stock),
-# the beta firmware switch and dashboard_import.
+# Firmware updates come from this repo's releases (GitHub Pages) instead of firmware.esphome.io.
+# Removed: the beta firmware switch and dashboard_import.
 packages:
   # This is an inline package to prefix the on_client_connected with the wait_until action
   # It must appear before the actual package so it becomes the orignal config and the
@@ -20,7 +20,19 @@ packages:
 esphome:
   project:
     name: Nabu Casa.Home Assistant Voice PE
-    version: 26.6.0-ganiushin.6
+    version: dev  # Replaced with the release tag by CI
+
+ota:
+  - platform: http_request
+    id: ota_http_request
+
+http_request:
+
+update:
+  - platform: http_request
+    name: None
+    id: update_http_request
+    source: https://ganiushin.github.io/voice-pe-firmware/firmware/manifest.json
 
 wifi:
   on_connect:

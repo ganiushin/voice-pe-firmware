@@ -3,5 +3,9 @@
 # - name: home-assistant-voice-XXXXXX (MAC suffix), same as stock
 # - API encryption key: the one Home Assistant already set on the device
 # - Wi-Fi: credentials saved on the device during setup
+# Use the same release in both places.
+substitutions:
+  voice_pe_components_source: github://ganiushin/voice-pe-firmware@26.6.0.1
+
 packages:
-  voice_pe: github://ganiushin/voice-pe-firmware/home-assistant-voice.factory.yaml@main
+  voice_pe: github://ganiushin/voice-pe-firmware/home-assistant-voice.factory.yaml@26.6.0.1

@@ -61,43 +61,63 @@
 
 ## Установка
 
-Отдельный аддон не нужен. Колонка остаётся в Home Assistant той же:
+Отдельный аддон не нужен. После прошивки колонка остаётся в Home Assistant той же:
 * имя остаётся `home-assistant-voice-XXXXXX`;
 * ключ API — тот, что HA уже записал на колонку;
 * Wi-Fi берётся из памяти колонки;
 * improv по BLE и USB сохранён.
 
-Автообновление со стокового сервера убрано, иначе HA вернул бы стоковую прошивку.
-Чтобы вернуться на сток, прошейте его через [web installer](https://esphome.github.io/home-assistant-voice-pe/).
+Обновления приходят из релизов этой репы: в HA у колонки есть сущность обновления,
+которая проверяет [манифест на GitHub Pages](https://ganiushin.github.io/voice-pe-firmware/firmware/manifest.json).
+Чтобы вернуться на сток, прошейте его через [установщик Voice PE](https://esphome.github.io/home-assistant-voice-pe/).
 
-Нужен ESPHome 2026.9.0 или новее. Компоненты скопированы из 2026.9.0, так что на более новой версии ESPHome их, возможно, придётся перенести.
+### Вариант 1: из браузера по USB
+Откройте https://ganiushin.github.io/voice-pe-firmware/ в Chrome или Edge и нажмите «Установить».
+Нужна только первая прошивка, дальше колонка обновляется из HA.
 
-### Вариант 1: ESPHome Device Builder
-Создайте устройство с содержимым [`example/voice-pe.yaml`](example/voice-pe.yaml) и нажмите Install → Wirelessly:
+### Вариант 2: ESPHome Device Builder
+Создайте устройство с содержимым [`example/voice-pe.yaml`](example/voice-pe.yaml) и нажмите Install → Wirelessly.
+Номер релиза указывается в двух местах, они должны совпадать:
 
 ```yaml
+substitutions:
+  voice_pe_components_source: github://ganiushin/voice-pe-firmware@26.6.0.1
+
 packages:
-  voice_pe: github://ganiushin/voice-pe-firmware/home-assistant-voice.factory.yaml@main
+  voice_pe: github://ganiushin/voice-pe-firmware/home-assistant-voice.factory.yaml@26.6.0.1
 ```
 
-### Вариант 2: с компьютера по OTA, без Device Builder
+Прошивка, собранная в Device Builder, называется `dev`, поэтому HA будет предлагать обновиться до последнего релиза.
+
+### Вариант 3: из локальной копии
 ```bash
 uv venv -p 3.13 .venv && uv pip install -p .venv esphome==2026.9.0
-.venv/bin/esphome run test/local-build.yaml --device home-assistant-voice-XXXXXX.local   # или IP
+.venv/bin/esphome run home-assistant-voice.factory.yaml --device /dev/cu.usbmodem101        # по USB
+.venv/bin/esphome run home-assistant-voice.factory.yaml --device home-assistant-voice-XXXXXX.local   # по сети
 ```
 Стоковая прошивка принимает OTA без пароля.
 
-### Вариант 3: по USB
-Соберите прошивку (`esphome compile test/local-build.yaml`) и прошейте
-`test/.esphome/build/home-assistant-voice/build/firmware.factory.bin` через https://web.esphome.io.
+## Версии и релизы
+
+Версия — это `<версия Voice PE, от которой сделана прошивка>.<номер>`, например `26.6.0.1`.
+Изменения по версиям описаны в [CHANGELOG.md](CHANGELOG.md).
+
+Как выпустить релиз:
+1. Обновить `CHANGELOG.md`, номер релиза в `example/voice-pe.yaml` и в README.
+2. Создать релиз с тегом новой версии:
+   `gh release create 26.6.0.2 --title 26.6.0.2 --notes-file <описание>`.
+3. CI ([`build.yml`](.github/workflows/build.yml)) соберёт прошивку, приложит бинарники к релизу
+   и опубликует её на GitHub Pages. После этого HA покажет обновление.
+
+Каждый пуш в `main` и каждый PR тоже собирается в CI, прошивку можно скачать из артефактов сборки.
 
 ## Структура
 
-* `home-assistant-voice.factory.yaml`: полный конфиг устройства (стоковый factory без автообновления).
+* `home-assistant-voice.factory.yaml`: полный конфиг устройства (стоковый factory с обновлениями из этой репы).
 * `home-assistant-voice.yaml`: пакет Voice PE с изменениями.
-* `sounds/`: укороченный звук пробуждения.
-* `test/local-build.yaml`: то же, но из локальной копии.
 * `components/`: изменённые `speaker_source` и `voice_assistant`.
+* `sounds/`: укороченный звук пробуждения.
+* `static/`: страница установки из браузера.
 * `upstream/`: нетронутые исходники, от которых сделаны изменения.
   Посмотреть все правки: `diff -ru upstream/esphome-2026.9.0 components` и
   `diff -u upstream/home-assistant-voice-pe-26.6.0/home-assistant-voice.yaml home-assistant-voice.yaml`.

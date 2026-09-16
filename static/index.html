@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Voice PE firmware</title>
+    <meta name="description" content="Прошивка Home Assistant Voice PE: диалог без самопрослушивания" />
+    <style>
+      :root { color-scheme: light dark; --bg: #fafafa; --fg: #1d1d1f; --muted: #6e6e73; --card: #ffffff; --border: #d2d2d7; }
+      @media (prefers-color-scheme: dark) {
+        :root { --bg: #111113; --fg: #f2f2f4; --muted: #a1a1a6; --card: #1c1c1f; --border: #3a3a3e; }
+      }
+      body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+      main { max-width: 640px; margin: 0 auto; padding: 48px 16px; }
+      h1 { font-size: 28px; margin: 0 0 8px; }
+      p { margin: 0 0 16px; }
+      .muted { color: var(--muted); }
+      .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin: 24px 0; }
+      ol { padding-left: 20px; margin: 0; }
+      li { margin-bottom: 8px; }
+      a { color: inherit; }
+      code { font-size: 14px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Прошивка Voice PE</h1>
+      <p class="muted">Версия __VERSION__ · диалог без самопрослушивания</p>
+
+      <div class="card">
+        <ol>
+          <li>Подключите Voice PE к компьютеру по USB-C.</li>
+          <li>Откройте страницу в Chrome или Edge и нажмите «Установить».</li>
+          <li>Если колонка уже была настроена, Wi-Fi и ключ API сохранятся. Новую колонку после прошивки настройте через Home Assistant.</li>
+        </ol>
+        <p style="margin: 20px 0 0">
+          <esp-web-install-button manifest="firmware/manifest.json">
+            <button slot="activate">Установить</button>
+          </esp-web-install-button>
+        </p>
+      </div>
+
+      <p class="muted">
+        Дальше колонка обновляется из Home Assistant.
+        Исходники и описание: <a href="https://github.com/ganiushin/voice-pe-firmware">ganiushin/voice-pe-firmware</a>.
+        Вернуться на стоковую прошивку: <a href="https://esphome.github.io/home-assistant-voice-pe/">установщик Voice PE</a>.
+      </p>
+    </main>
+    <script type="module" src="https://cdn.jsdelivr.net/npm/esp-web-tools@10/dist/web/install-button.js"></script>
+  </body>
+</html>

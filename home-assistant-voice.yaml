@@ -1,6 +1,7 @@
 substitutions:
-  # Where the patched speaker_source / voice_assistant components come from
-  voice_pe_components_source: github://ganiushin/voice-pe-firmware@main
+  # Where the patched speaker_source / voice_assistant components come from, relative to the config being built.
+  # A config that uses this repo as a remote package sets it to github://ganiushin/voice-pe-firmware@<release>.
+  voice_pe_components_source: components
   # Phrase reported by the "stop" micro wake word model (stop.json)
   stop_word_phrase: Stop
   # Transcripts (letters only, lowercase) that end a follow-up before the agent answers, as C++ string literals
@@ -30,7 +31,7 @@ substitutions:
   timer_finished_sound_file: https://github.com/esphome/home-assistant-voice-pe/raw/dev/sounds/timer_finished.flac
   # Stock sound trimmed to 350 ms with a fade-out: the stock file has ~600 ms of quiet reverb and silence at the end,
   # and listening starts only after the whole file is played out
-  wake_word_triggered_sound_file: https://github.com/ganiushin/voice-pe-firmware/raw/main/sounds/wake_word_triggered_short.flac
+  wake_word_triggered_sound_file: https://github.com/ganiushin/voice-pe-firmware/raw/3a9cbfd05c508322a3e54162c20f88c11a8ed899/sounds/wake_word_triggered_short.flac
   center_button_press_sound_file: https://github.com/esphome/home-assistant-voice-pe/raw/dev/sounds/center_button_press.flac
   center_button_double_press_sound_file: https://github.com/esphome/home-assistant-voice-pe/raw/dev/sounds/center_button_double_press.flac
   center_button_triple_press_sound_file: https://github.com/esphome/home-assistant-voice-pe/raw/dev/sounds/center_button_triple_press.flac
@@ -1695,7 +1696,6 @@ external_components:
     components:
       - speaker_source
       - voice_assistant
-    refresh: 1d
 
 audio_dac:
   - platform: aic3204

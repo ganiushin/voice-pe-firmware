@@ -1,6 +1,0 @@
-# Local build: same as example/voice-pe.yaml, but uses the package and components from this checkout.
-substitutions:
-  voice_pe_components_source: ../components
-
-packages:
-  voice_pe: !include ../home-assistant-voice.factory.yaml
