@@ -246,6 +246,7 @@ class VoiceAssistant final : public Component {
   void set_state_(State state, State desired_state);
   void signal_stop_();
   void start_playback_timeout_();
+  void send_announce_finished_(bool success);
 #ifdef USE_VOICE_ASSISTANT_ANNOUNCEMENT_EVENTS
   void on_announcement_finished_(speaker_source::AnnouncementResult result);
 #endif
@@ -305,6 +306,7 @@ class VoiceAssistant final : public Component {
   bool wait_for_stream_end_{false};
   bool stream_ended_{false};
   bool speaker_finishing_{false};  // finish() was called on the speaker after the reply stream ended
+  bool speaker_announcement_{false};  // playing an announcement streamed by the client, not a reply
 #endif
 #ifdef USE_MEDIA_PLAYER
   media_player::MediaPlayer *media_player_{nullptr};

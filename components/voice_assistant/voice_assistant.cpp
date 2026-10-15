@@ -555,6 +555,12 @@ void VoiceAssistant::loop() {
         this->stream_ended_ = false;
 
         this->tts_stream_end_trigger_.trigger();
+        if (this->speaker_announcement_) {
+          this->speaker_announcement_ = false;
+          this->send_announce_finished_(true);
+          // A reply ends with RUN_END from the client; an announcement has no run, so end it here
+          this->defer([this]() { this->end_trigger_.trigger(); });
+        }
       }
 #endif
       if (this->continue_conversation_) {
@@ -758,6 +764,13 @@ void VoiceAssistant::request_stop() {
       this->desired_state_ = State::IDLE;
       break;
     case State::AWAITING_RESPONSE:
+#ifdef USE_SPEAKER
+      if (this->speaker_announcement_) {
+        this->speaker_announcement_ = false;
+        this->cancel_timeout("announce-start");
+        this->send_announce_finished_(false);
+      }
+#endif
       this->signal_stop_();
       // Home Assistant aborts the run by cancelling it, so it may never send RUN_END. Finish here and ignore
       // whatever the aborted run still sends, so a late response isn't played.
@@ -771,6 +784,10 @@ void VoiceAssistant::request_stop() {
         // Wake word or button during a streamed reply: cut it off now and tell the agent to stop sending.
         this->speaker_->stop();
         this->speaker_finishing_ = false;
+        if (this->speaker_announcement_) {
+          this->speaker_announcement_ = false;
+          this->send_announce_finished_(false);
+        }
         this->cancel_timeout("speaker-timeout");
         this->cancel_timeout("playing");
         this->clear_buffers_();
@@ -812,6 +829,16 @@ void VoiceAssistant::signal_stop_() {
   msg.start = false;
   if (!this->api_client_->send_message(msg)) {
     API_LOG_MSG_DROPPED(TAG, "Stop request");
+  }
+}
+
+void VoiceAssistant::send_announce_finished_(bool success) {
+  if (this->api_client_ == nullptr)
+    return;
+  api::VoiceAssistantAnnounceFinished msg;
+  msg.success = success;
+  if (!this->api_client_->send_message(msg)) {
+    API_LOG_MSG_DROPPED(TAG, "Announce-finished");
   }
 }
 
@@ -1045,6 +1072,7 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
           channels = 1;
         }
         this->speaker_finishing_ = false;
+        this->cancel_timeout("announce-start");
         this->speaker_->set_audio_stream_info(audio::AudioStreamInfo(16, channels, sample_rate));
         this->speaker_->start();
         this->wait_for_stream_end_ = true;
@@ -1162,6 +1190,45 @@ void VoiceAssistant::timer_tick_() {
 }
 
 void VoiceAssistant::on_announce(const api::VoiceAssistantAnnounceRequest &msg) {
+#ifdef USE_SPEAKER
+  if (this->speaker_ != nullptr) {
+    // Speaker output: the client streams the announcement as PCM over the API (TTS_STREAM_START,
+    // audio, TTS_STREAM_END), the same way as a reply. The device answers with AnnounceFinished
+    // once the last sample has been played, or right away with success=false if it is busy.
+    if (this->state_ != State::IDLE || this->speaker_announcement_) {
+      ESP_LOGD(TAG, "Busy, refusing the announcement");
+      this->send_announce_finished_(false);
+      return;
+    }
+    if (this->speaker_buffer_ == nullptr) {
+      RAMAllocator<uint8_t> speaker_allocator;
+      this->speaker_buffer_ = speaker_allocator.allocate(SPEAKER_BUFFER_SIZE);
+      if (this->speaker_buffer_ == nullptr) {
+        ESP_LOGW(TAG, "Could not allocate speaker buffer for the announcement");
+        this->send_announce_finished_(false);
+        return;
+      }
+      this->clear_buffers_();
+    }
+    ESP_LOGD(TAG, "Announcement: \"%s\"", msg.text.c_str());
+    this->ignore_run_events_ = false;  // a previous aborted run must not swallow this stream
+    this->speaker_announcement_ = true;
+    this->continue_conversation_ = msg.start_conversation;
+    this->tts_start_trigger_.trigger(msg.text);
+    this->set_state_(State::AWAITING_RESPONSE, State::AWAITING_RESPONSE);
+    // Guard only: the client starts streaming right after the request
+    this->set_timeout("announce-start", 10000, [this]() {
+      if (this->speaker_announcement_ && this->state_ == State::AWAITING_RESPONSE) {
+        ESP_LOGW(TAG, "Announcement stream never started");
+        this->speaker_announcement_ = false;
+        this->send_announce_finished_(false);
+        this->set_state_(State::IDLE, State::IDLE);
+        this->defer([this]() { this->end_trigger_.trigger(); });
+      }
+    });
+    return;
+  }
+#endif
 #ifdef USE_MEDIA_PLAYER
   if (this->media_player_ != nullptr) {
     this->tts_start_trigger_.trigger(msg.text);
