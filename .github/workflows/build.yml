@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   # Own build job instead of esphome/workflows build.yml: that one sets the version by replacing "version: dev",
-  # and Home Assistant treats "dev" as newer than any release, so a local build would never be offered an update.
+  # and "dev" is treated as newer than any release, so a local build would never be offered an update.
   build-firmware:
     name: Build Firmware
     runs-on: ubuntu-latest

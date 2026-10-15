@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Voice PE firmware</title>
-    <meta name="description" content="Прошивка Home Assistant Voice PE: диалог без самопрослушивания" />
+    <meta name="description" content="Прошивка Voice PE для home-agent" />
     <style>
       :root { color-scheme: light dark; --bg: #fafafa; --fg: #1d1d1f; --muted: #6e6e73; --card: #ffffff; --border: #d2d2d7; }
       @media (prefers-color-scheme: dark) {
@@ -25,13 +25,14 @@
   <body>
     <main>
       <h1>Прошивка Voice PE</h1>
-      <p class="muted">Версия __VERSION__ · диалог без самопрослушивания</p>
+      <p class="muted">Версия __VERSION__ · колонка для home-agent</p>
 
       <div class="card">
         <ol>
           <li>Подключите Voice PE к компьютеру по USB-C.</li>
           <li>Откройте страницу в Chrome или Edge и нажмите «Установить».</li>
-          <li>Если колонка уже была настроена, Wi-Fi и ключ API сохранятся. Новую колонку после прошивки настройте через Home Assistant.</li>
+          <li>После прошивки установщик предложит подключить колонку к Wi-Fi.</li>
+          <li>В агенте: «Настройки» → «Добавить колонку», введите её IP и комнату.</li>
         </ol>
         <p style="margin: 20px 0 0">
           <esp-web-install-button manifest="firmware/manifest.json">
@@ -41,7 +42,7 @@
       </div>
 
       <p class="muted">
-        Дальше колонка обновляется из Home Assistant.
+        Дальше колонка обновляется из агента.
         Исходники и описание: <a href="https://github.com/ganiushin/voice-pe-firmware">ganiushin/voice-pe-firmware</a>.
         Вернуться на стоковую прошивку: <a href="https://esphome.github.io/home-assistant-voice-pe/">установщик Voice PE</a>.
       </p>
