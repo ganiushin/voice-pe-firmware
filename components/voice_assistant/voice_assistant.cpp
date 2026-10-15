@@ -25,7 +25,9 @@ static const size_t RING_BUFFER_SIZE = RING_BUFFER_SAMPLES * sizeof(int16_t);
 static const size_t SEND_BUFFER_SAMPLES = 32 * SAMPLE_RATE_HZ / 1000;  // 32ms * 16kHz / 1000ms
 static const size_t SEND_BUFFER_SIZE = SEND_BUFFER_SAMPLES * sizeof(int16_t);
 static const size_t RECEIVE_SIZE = 1024;
-static const size_t SPEAKER_BUFFER_SIZE = 16 * RECEIVE_SIZE;
+// The agent streams the reply at 48 kHz over the API; 64 KB is ~0.7 s of it, room for Wi-Fi jitter.
+// Audio that doesn't fit is dropped, so the client paces its sending to real time.
+static const size_t SPEAKER_BUFFER_SIZE = 64 * RECEIVE_SIZE;
 
 // If one microphone channel keeps producing audio while another configured channel produces none for this
 // long, treat the silent channel as failed and stop the stream. A working microphone exposes a chunk every
@@ -532,9 +534,16 @@ void VoiceAssistant::loop() {
           this->write_speaker_();
           break;
         }
-        if (this->speaker_->has_buffered_data() || this->speaker_->is_running()) {
+        // The mixer inputs never time out on their own, so ask the speaker to stop once it has played out
+        // what it has, instead of waiting for the 5 s speaker-timeout.
+        if (!this->speaker_finishing_) {
+          this->speaker_->finish();
+          this->speaker_finishing_ = true;
+        }
+        if (!this->speaker_->is_stopped()) {
           break;
         }
+        this->speaker_finishing_ = false;
         ESP_LOGD(TAG, "Speaker has finished outputting all audio");
         this->speaker_->stop();
         this->cancel_timeout("speaker-timeout");
@@ -757,6 +766,23 @@ void VoiceAssistant::request_stop() {
       this->defer([this]() { this->end_trigger_.trigger(); });
       break;
     case State::STREAMING_RESPONSE:
+#ifdef USE_SPEAKER
+      if (this->speaker_ != nullptr) {
+        // Wake word or button during a streamed reply: cut it off now and tell the agent to stop sending.
+        this->speaker_->stop();
+        this->speaker_finishing_ = false;
+        this->cancel_timeout("speaker-timeout");
+        this->cancel_timeout("playing");
+        this->clear_buffers_();
+        this->wait_for_stream_end_ = false;
+        this->stream_ended_ = false;
+        this->signal_stop_();
+        this->ignore_run_events_ = true;
+        this->set_state_(State::IDLE, State::IDLE);
+        this->defer([this]() { this->end_trigger_.trigger(); });
+        break;
+      }
+#endif
 #ifdef USE_MEDIA_PLAYER
       // Stop any ongoing media player announcement
       if (this->media_player_ != nullptr) {
@@ -1000,8 +1026,33 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
     case api::enums::VOICE_ASSISTANT_TTS_STREAM_START: {
 #ifdef USE_SPEAKER
       if (this->speaker_ != nullptr) {
+        // The agent sends the reply as raw PCM over the API while it is still being generated, so playback
+        // starts here, not on TTS_END. Format comes with the event; default is 16 kHz mono 16-bit.
+        uint32_t sample_rate = 16000;
+        uint8_t channels = 1;
+        for (const auto &arg : msg.data) {
+          // The value points into the message buffer and isn't null-terminated: copy it before parsing.
+          if (arg.name == "sample_rate") {
+            sample_rate = strtoul(arg.value.str().c_str(), nullptr, 10);
+          } else if (arg.name == "channels") {
+            channels = strtoul(arg.value.str().c_str(), nullptr, 10);
+          }
+        }
+        if (sample_rate < 8000 || sample_rate > 48000 || channels < 1 || channels > 2) {
+          ESP_LOGW(TAG, "Unsupported TTS stream format %" PRIu32 " Hz, %u ch; using 16 kHz mono", sample_rate,
+                   channels);
+          sample_rate = 16000;
+          channels = 1;
+        }
+        this->speaker_finishing_ = false;
+        this->speaker_->set_audio_stream_info(audio::AudioStreamInfo(16, channels, sample_rate));
+        this->speaker_->start();
         this->wait_for_stream_end_ = true;
-        ESP_LOGD(TAG, "TTS stream start");
+        this->stream_ended_ = false;
+        ESP_LOGD(TAG, "TTS stream start: %" PRIu32 " Hz, %u ch", sample_rate, channels);
+        if (this->state_ != State::STREAMING_RESPONSE) {
+          this->set_state_(State::STREAMING_RESPONSE, State::STREAMING_RESPONSE);
+        }
         this->defer([this] { this->tts_stream_start_trigger_.trigger(); });
       }
 #endif
@@ -1034,6 +1085,9 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
 void VoiceAssistant::on_audio(const api::VoiceAssistantAudio &msg) {
 #ifdef USE_SPEAKER  // We should never get to this function if there is no speaker anyway
   if ((this->speaker_ != nullptr) && (this->speaker_buffer_ != nullptr)) {
+    if (!this->wait_for_stream_end_ || this->ignore_run_events_) {
+      return;  // Audio still in flight after the reply was stopped
+    }
     if (this->speaker_buffer_index_ + msg.data_len <= SPEAKER_BUFFER_SIZE) {
       memcpy(this->speaker_buffer_ + this->speaker_buffer_index_, msg.data, msg.data_len);
       this->speaker_buffer_index_ += msg.data_len;

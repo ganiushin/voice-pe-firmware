@@ -5,6 +5,13 @@
 Основа: пакет [home-assistant-voice-pe 26.6.0](https://github.com/esphome/home-assistant-voice-pe/tree/26.6.0)
 и компоненты `speaker_source` и `voice_assistant` из [ESPHome 2026.9.0](https://github.com/esphome/esphome/tree/2026.9.0).
 
+## Ответ по API прямо в динамик (с 26.6.0.2)
+
+Ответ ассистента приходит сырым PCM по ESPHome API (`TTS_STREAM_START` с частотой и числом каналов,
+куски звука, `TTS_STREAM_END`) и сразу идёт в динамик через отдельный вход микшера. Медиаплеер и
+ссылки для ответа не нужны; медиаплеер остаётся для звуков колонки, музыки и объявлений.
+Так колонкой управляет [home-agent](https://github.com/ganiushin/home-agent). Подробности — в [CHANGELOG.md](CHANGELOG.md).
+
 ## Проблема
 
 В стоковой прошивке `voice_assistant` ставит таймер на 2 секунды, когда отдаёт медиаплееру ссылку на ответ.
@@ -85,10 +92,10 @@ Wyoming STT всегда берёт этот канал, так что так м
 
 ```yaml
 substitutions:
-  voice_pe_components_source: github://ganiushin/voice-pe-firmware@26.6.0.1
+  voice_pe_components_source: github://ganiushin/voice-pe-firmware@26.6.0.2
 
 packages:
-  voice_pe: github://ganiushin/voice-pe-firmware/home-assistant-voice.factory.yaml@26.6.0.1
+  voice_pe: github://ganiushin/voice-pe-firmware/home-assistant-voice.factory.yaml@26.6.0.2
 ```
 
 Прошивка, собранная в Device Builder или локально, получает версию `0.0.0-local`, поэтому HA предложит обновиться до последнего релиза.

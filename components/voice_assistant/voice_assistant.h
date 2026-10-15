@@ -304,6 +304,7 @@ class VoiceAssistant final : public Component {
   size_t speaker_bytes_received_{0};
   bool wait_for_stream_end_{false};
   bool stream_ended_{false};
+  bool speaker_finishing_{false};  // finish() was called on the speaker after the reply stream ended
 #endif
 #ifdef USE_MEDIA_PLAYER
   media_player::MediaPlayer *media_player_{nullptr};

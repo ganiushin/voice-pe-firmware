@@ -1556,6 +1556,9 @@ speaker:
         timeout: never
       - id: media_mixing_input
         timeout: never
+      # Agent replies: raw PCM streamed over the API straight into the speaker (no media player, no URL)
+      - id: va_mixing_input
+        timeout: never
 
   # Virtual speakers to resample each pipelines' audio, if necessary, as the mixer speaker requires the same sample rate
   - platform: resampler
@@ -1566,6 +1569,11 @@ speaker:
   - platform: resampler
     id: media_resampling_speaker
     output_speaker: media_mixing_input
+    sample_rate: 48000
+    bits_per_sample: 16
+  - platform: resampler
+    id: va_resampling_speaker
+    output_speaker: va_mixing_input
     sample_rate: 48000
     bits_per_sample: 16
 
@@ -1847,7 +1855,9 @@ voice_assistant:
       channels: 0
     - microphone: i2s_mics
       channels: 1
-  media_player: external_media_player
+  # The reply comes as PCM over the API (TTS_STREAM_START .. TTS_STREAM_END) and goes straight to the speaker.
+  # The voice assistant waits until the speaker has played everything out before listening again.
+  speaker: va_resampling_speaker
   micro_wake_word: mww
   use_wake_word: false
   noise_suppression_level: 0
@@ -1942,17 +1952,13 @@ voice_assistant:
   on_stt_vad_end:
     - lambda: id(voice_assistant_phase) = ${voice_assist_thinking_phase_id};
     - script.execute: control_leds
-  on_intent_progress:
-    - if:
-        condition:
-          # A nonempty x variable means a streaming TTS url was sent to the media player
-          lambda: 'return !x.empty();'
-        then:
-          - lambda: |-
-              id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
-              id(conversation_has_reply) = true;
-          - script.execute: control_leds
-          - script.execute: enable_conversation_stop_word
+  on_tts_stream_start:
+    # The agent started streaming the reply
+    - lambda: |-
+        id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
+        id(conversation_has_reply) = true;
+    - script.execute: control_leds
+    - script.execute: enable_conversation_stop_word
   on_tts_start:
     - if:
         condition:
