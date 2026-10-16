@@ -1053,6 +1053,12 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
     case api::enums::VOICE_ASSISTANT_TTS_STREAM_START: {
 #ifdef USE_SPEAKER
       if (this->speaker_ != nullptr) {
+        // A stream belongs to a reply or an accepted announcement (both wait in AWAITING_RESPONSE).
+        // Anything else is late: a refused announcement or a reply the user already stopped.
+        if (this->state_ != State::AWAITING_RESPONSE && this->state_ != State::STREAMING_RESPONSE) {
+          ESP_LOGD(TAG, "Ignoring TTS stream start in state %s", LOG_STR_ARG(voice_assistant_state_to_string(this->state_)));
+          break;
+        }
         // The agent sends the reply as raw PCM over the API while it is still being generated, so playback
         // starts here, not on TTS_END. Format comes with the event; default is 16 kHz mono 16-bit.
         uint32_t sample_rate = 16000;
@@ -1113,8 +1119,8 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
 void VoiceAssistant::on_audio(const api::VoiceAssistantAudio &msg) {
 #ifdef USE_SPEAKER  // We should never get to this function if there is no speaker anyway
   if ((this->speaker_ != nullptr) && (this->speaker_buffer_ != nullptr)) {
-    if (!this->wait_for_stream_end_ || this->ignore_run_events_) {
-      return;  // Audio still in flight after the reply was stopped
+    if (!this->wait_for_stream_end_ || this->stream_ended_ || this->ignore_run_events_) {
+      return;  // Audio still in flight after the reply was stopped, or of a stream that was ignored
     }
     if (this->speaker_buffer_index_ + msg.data_len <= SPEAKER_BUFFER_SIZE) {
       memcpy(this->speaker_buffer_ + this->speaker_buffer_index_, msg.data, msg.data_len);
@@ -1210,7 +1216,8 @@ void VoiceAssistant::on_announce(const api::VoiceAssistantAnnounceRequest &msg) 
       }
       this->clear_buffers_();
     }
-    ESP_LOGD(TAG, "Announcement: \"%s\"", msg.text.c_str());
+    // msg.text points into the API receive buffer and isn't null-terminated: print exactly its length.
+    ESP_LOGD(TAG, "Announcement: \"%.*s\"", static_cast<int>(msg.text.size()), msg.text.c_str());
     this->ignore_run_events_ = false;  // a previous aborted run must not swallow this stream
     this->speaker_announcement_ = true;
     this->continue_conversation_ = msg.start_conversation;

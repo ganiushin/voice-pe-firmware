@@ -366,7 +366,13 @@ binary_sensor:
                                                   id: play_sound
                                                   priority: true
                                                   sound_file: "center_button_press_sound"
-                                              - delay: 300ms
+                                              # Start listening once the press sound has been played out, so it
+                                              # isn't recorded (same as the wake word path). The timeout is a guard.
+                                              - wait_until:
+                                                  condition:
+                                                    not:
+                                                      speaker_source.is_announcement_active: external_media_player
+                                                  timeout: 5s
                                               - voice_assistant.start:
       # Double Click
       #  . Exposed as an event entity. To be used in automations inside Home Assistant
@@ -1468,14 +1474,18 @@ script:
   - id: fetch_first_active_timer
     then:
       - lambda: |
+          // Start from the first *active* timer: a stale inactive one at 0 s would otherwise win every
+          // comparison and leave the ring dark.
           const auto &timers = id(va).get_timers();
-          auto output_timer = *timers.begin();
+          bool found = false;
+          voice_assistant::Timer output_timer;
           for (const auto &timer : timers) {
-            if (timer.is_active && timer.seconds_left <= output_timer.seconds_left) {
+            if (timer.is_active && (!found || timer.seconds_left <= output_timer.seconds_left)) {
               output_timer = timer;
+              found = true;
             }
           }
-          id(first_active_timer) = output_timer;
+          if (found) id(first_active_timer) = output_timer;
 
   # Script used to check if a timer is active (Stored in global is_timer_active)
   - id: check_if_timers_active
@@ -1762,7 +1772,7 @@ micro_wake_word:
                       lambda: return wake_word != "${stop_word_phrase}";
                     then:
                       # Wait for the interrupted reply to actually go silent, so it isn't recorded.
-                      # The timeout is only a guard; the voice assistant finishes on the media player's event.
+                      # The timeout is only a guard; the voice assistant finishes when the speaker has played out.
                       - wait_until:
                           condition:
                             and:
@@ -1939,8 +1949,13 @@ voice_assistant:
               }
               w += static_cast<char>(c);
             }
+            // "стоп", "стоп стоп", "Стоп, стоп!" — spaces and punctuation are already gone.
             for (const char *phrase : {${stop_phrases}}) {
-              if (w == phrase) return true;
+              const std::string p(phrase);
+              if (w.empty() || w.size() % p.size() != 0) continue;
+              bool repeated = true;
+              for (size_t i = 0; i < w.size() && repeated; i += p.size()) repeated = w.compare(i, p.size(), p) == 0;
+              if (repeated) return true;
             }
             return false;
         then:
