@@ -1709,9 +1709,11 @@ external_components:
     components:
       - voice_kit
     refresh: 0s
-  # speaker_source and voice_assistant patched so the microphone only reopens after a response was played out
+  # speaker_source and voice_assistant patched so the microphone only reopens after a response was played out;
+  # mixer patched so a finishing input doesn't wait forever for frames the output dropped
   - source: ${voice_pe_components_source}
     components:
+      - mixer
       - speaker_source
       - voice_assistant
 

@@ -144,6 +144,12 @@ struct PipelineContext {
   // Set while only unplayed frames are left to wait for, since drain_start_ms
   bool draining{false};
   uint32_t drain_start_ms{0};
+  // When the request began; a request that won't finish is logged once with what holds it
+  uint32_t request_start_ms{0};
+  bool request_stall_logged{false};
+  // A play waiting for the speaker to stop, since speaker_wait_start_ms
+  bool waiting_for_speaker{false};
+  uint32_t speaker_wait_start_ms{0};
 
   /// @brief Check if this pipeline is configured (has a speaker assigned)
   bool is_configured() const { return this->speaker != nullptr; }

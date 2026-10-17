@@ -18,6 +18,10 @@ static constexpr uint32_t UNPLAYED_TOLERANCE_MS = 10;
 // Guard for a frame accounting mismatch: once the speaker has stopped, the remaining frames must be played out within
 // their own duration plus this margin (output buffers and DAC)
 static constexpr uint32_t DRAIN_GUARD_MARGIN_MS = 500;
+// A speaker still running with nothing of ours playing gets this long to finish on its own before it is stopped
+static constexpr uint32_t SPEAKER_STOP_WAIT_MS = 2000;
+// An announcement request still active after this long is logged with what keeps it active
+static constexpr uint32_t ANNOUNCEMENT_STALL_LOG_MS = 30000;
 
 static const char *const TAG = "speaker_source_media_player";
 
@@ -234,6 +238,8 @@ void SpeakerSourceMediaPlayer::begin_announcement_request_() {
     return;
   }
   ps.request_active = true;
+  ps.request_start_ms = millis();
+  ps.request_stall_logged = false;
   ps.request_started = false;
   ps.request_failed = false;
   ps.request_stopped = false;
@@ -270,6 +276,16 @@ void SpeakerSourceMediaPlayer::check_announcement_finished_() {
   PipelineContext &ps = this->pipelines_[ANNOUNCEMENT_PIPELINE];
   if (!ps.request_active) {
     return;
+  }
+  if (!ps.request_stall_logged && millis() - ps.request_start_ms > ANNOUNCEMENT_STALL_LOG_MS) {
+    ps.request_stall_logged = true;
+    ESP_LOGW(TAG,
+             "Announcement still active after %" PRIu32 " s: queued commands %" PRIu32 ", playlist %u/%u, "
+             "active source %s, pending source %s, speaker %s, unplayed frames %" PRIu32,
+             ANNOUNCEMENT_STALL_LOG_MS / 1000, ps.queued_commands, (unsigned) ps.playlist_index,
+             (unsigned) ps.playlist.size(), ps.active_source != nullptr ? "yes" : "no",
+             ps.pending_source != nullptr ? "yes" : "no", ps.speaker->is_stopped() ? "stopped" : "running",
+             ps.unplayed_frames.load(std::memory_order_relaxed));
   }
 
   // Quiet means: no queued commands, nothing left in the playlist, no source playing or starting, and every frame
@@ -502,8 +518,20 @@ bool SpeakerSourceMediaPlayer::try_execute_play_uri_(const std::string &uri, uin
 
   // Check if speaker is ready
   if (!ps.speaker->is_stopped()) {
+    // Nothing of ours is playing, so nothing will stop this speaker: the play would wait (and block every command
+    // queued behind it) for as long as the speaker keeps running. Let it finish what it has, then stop it.
+    const uint32_t now = millis();
+    if (!ps.waiting_for_speaker) {
+      ps.waiting_for_speaker = true;
+      ps.speaker_wait_start_ms = now;
+    } else if (now - ps.speaker_wait_start_ms > SPEAKER_STOP_WAIT_MS) {
+      ESP_LOGW(TAG, "Pipeline %u: speaker kept running with nothing playing, stopping it", pipeline);
+      this->stop_speaker_(pipeline);
+      ps.speaker_wait_start_ms = now;
+    }
     return false;  // Speaker not ready yet, retry later
   }
+  ps.waiting_for_speaker = false;
 
   // Set pending source so handle_media_state_changed_ can recognize it when the source transitions to PLAYING
   ps.pending_source = target_source;
